@@ -1,0 +1,879 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bolão da Copa — Previsor de Placares (multi-fonte)</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --card: #161b22;
+    --card2: #1c2330;
+    --border: #2d3748;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --green: #2ea44f;
+    --yellow: #d4a72c;
+    --red: #d05050;
+    --accent: #58a6ff;
+    --hot: #ff7b42;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    min-height: 100vh;
+    padding-bottom: 60px;
+  }
+  header { text-align: center; padding: 28px 16px 12px; }
+  header h1 { font-size: 1.7rem; }
+  header h1 span { color: var(--green); }
+  header p { color: var(--muted); margin-top: 6px; font-size: .95rem; }
+  .tabs { display: flex; justify-content: center; gap: 8px; margin: 18px 0; }
+  .tabs button {
+    background: var(--card);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 10px 22px;
+    border-radius: 8px;
+    font-size: 1rem;
+    cursor: pointer;
+  }
+  .tabs button.active {
+    background: var(--green);
+    border-color: var(--green);
+    color: #fff;
+    font-weight: 600;
+  }
+  main { max-width: 780px; margin: 0 auto; padding: 0 14px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px;
+    margin-bottom: 14px;
+  }
+  .match-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .teams {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 1.1rem;
+    font-weight: 600;
+    flex: 1;
+  }
+  .teams img { width: 28px; height: 28px; object-fit: contain; }
+  .vs { color: var(--muted); font-weight: 400; font-size: .9rem; }
+  .when { color: var(--muted); font-size: .85rem; white-space: nowrap; }
+  .picks {
+    display: flex;
+    gap: 12px;
+    margin-top: 14px;
+    flex-wrap: wrap;
+  }
+  .pick-box {
+    flex: 1;
+    min-width: 180px;
+    background: var(--card2);
+    border-radius: 10px;
+    padding: 12px 16px;
+    text-align: center;
+    border: 1px solid transparent;
+  }
+  .pick-box.main { border-color: var(--green); }
+  .pick-box.hot { border-color: var(--hot); }
+  .pick-label { font-size: .78rem; color: var(--muted); margin-bottom: 4px; }
+  .pick-score { font-size: 2rem; font-weight: 800; letter-spacing: 2px; }
+  .pick-box.main .pick-score { color: var(--green); }
+  .pick-box.hot .pick-score { color: var(--hot); }
+  .pick-sub { font-size: .75rem; color: var(--muted); margin-top: 4px; }
+  .probs { margin-top: 12px; }
+  .prob-bar {
+    display: flex;
+    height: 22px;
+    border-radius: 6px;
+    overflow: hidden;
+    font-size: .75rem;
+    font-weight: 600;
+    color: #fff;
+  }
+  .prob-bar div {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .pb-w { background: var(--green); }
+  .pb-d { background: var(--yellow); color: #222; }
+  .pb-l { background: var(--red); }
+  .prob-legend {
+    display: flex;
+    justify-content: space-between;
+    font-size: .75rem;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+  .fontes {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+  }
+  .fonte-chip {
+    background: var(--card2);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 4px 12px;
+    font-size: .74rem;
+    color: var(--muted);
+  }
+  .fonte-chip b { color: var(--text); }
+  .extras {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+    font-size: .82rem;
+    color: var(--muted);
+  }
+  .extras b { color: var(--text); }
+  details { margin-top: 12px; }
+  summary { cursor: pointer; color: var(--accent); font-size: .9rem; user-select: none; }
+  table.top-scores { width: 100%; margin-top: 10px; border-collapse: collapse; font-size: .9rem; }
+  table.top-scores td { padding: 6px 10px; border-bottom: 1px solid var(--border); }
+  table.top-scores td:last-child { text-align: right; color: var(--muted); white-space: nowrap; }
+  .score-cell { font-weight: 700; }
+  .meter {
+    display: inline-block;
+    height: 8px;
+    background: var(--accent);
+    border-radius: 4px;
+    vertical-align: middle;
+    margin-left: 8px;
+  }
+  .status-live { color: var(--red); font-weight: 700; font-size: .8rem; animation: pulse 1.5s infinite; }
+  @keyframes pulse { 50% { opacity: .4; } }
+  .real-score { font-size: 1.6rem; font-weight: 800; text-align: center; margin-top: 10px; }
+  .msg { text-align: center; color: var(--muted); padding: 30px 10px; line-height: 1.6; }
+  .msg.error { color: var(--red); }
+  .sim-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: center; }
+  .sim-row select {
+    flex: 1;
+    min-width: 180px;
+    background: var(--card2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px;
+    font-size: 1rem;
+  }
+  .sim-x { color: var(--muted); font-weight: 700; }
+  .sim-opts {
+    display: flex;
+    gap: 18px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-top: 14px;
+    font-size: .88rem;
+    color: var(--muted);
+  }
+  .sim-opts label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .btn-sim {
+    display: block;
+    margin: 16px auto 0;
+    background: var(--green);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 12px 36px;
+    font-size: 1.05rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .btn-sim:hover { filter: brightness(1.1); }
+  footer {
+    text-align: center;
+    color: var(--muted);
+    font-size: .75rem;
+    margin-top: 28px;
+    padding: 0 16px;
+    line-height: 1.5;
+  }
+  .refresh-note { text-align: center; color: var(--muted); font-size: .8rem; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>⚽ Bolão da Copa <span>2026</span> — Previsor Multi-Fonte</h1>
+  <p>Consenso entre 5 fontes: Pinnacle · DraftKings · Polymarket · torcida (365Scores) · modelo Elo</p>
+</header>
+
+<div class="tabs">
+  <button id="tab-jogos" class="active" onclick="showTab('jogos')">📅 Jogos da Copa</button>
+  <button id="tab-sim" onclick="showTab('sim')">🎯 Simular partida</button>
+</div>
+
+<main>
+  <section id="sec-jogos">
+    <div class="refresh-note" id="refresh-note"></div>
+    <div id="lista-jogos"><div class="msg">Consultando as fontes…</div></div>
+  </section>
+
+  <section id="sec-sim" style="display:none">
+    <div class="card">
+      <div class="sim-row">
+        <select id="sel-a"></select>
+        <span class="sim-x">×</span>
+        <select id="sel-b"></select>
+      </div>
+      <div class="sim-opts">
+        <label><input type="checkbox" id="chk-mata"> Mata-mata (jogo mais cauteloso)</label>
+        <label>Média de gols esperada:
+          <input type="range" id="rng-gols" min="2.0" max="3.2" step="0.1" value="2.5"
+                 oninput="document.getElementById('lbl-gols').textContent=this.value">
+          <b id="lbl-gols" style="color:var(--text)">2.5</b>
+        </label>
+      </div>
+      <button class="btn-sim" onclick="simular()">Calcular previsão</button>
+      <p style="text-align:center;color:var(--muted);font-size:.78rem;margin-top:10px">
+        O simulador usa apenas o modelo Elo (odds e votos só existem para jogos reais agendados).
+      </p>
+    </div>
+    <div id="sim-result"></div>
+  </section>
+</main>
+
+<footer>
+  <b>Como o consenso é calculado:</b> cada fonte vira probabilidades de vitória/empate/derrota, sem a margem da casa:
+  💹 Pinnacle (peso 3 — a casa de referência do mercado), 🏦 DraftKings via ESPN (peso 2,5),
+  📊 Polymarket (peso 2 — mercado de previsões com dinheiro real), 👥 votos da torcida no 365Scores (peso 1,5)
+  e 📈 modelo Elo + Poisson (peso 1,5). A média ponderada gera a matriz de placares
+  (Poisson com correção Dixon-Coles), de onde saem o placar mais provável e o palpite quente.<br>
+  Probabilidades são estimativas — o palpite final é seu. Boa sorte no bolão! 🍀
+</footer>
+
+<script>
+/* ============================================================
+   RATINGS ELO DAS SELEÇÕES (aprox. eloratings.net, início 2026)
+   ============================================================ */
+const ELO = {
+  "Argentina": 2143, "Espanha": 2188, "França": 2086, "Inglaterra": 2103,
+  "Brasil": 2046, "Portugal": 2034, "Holanda": 2050, "Alemanha": 1986,
+  "Colômbia": 1996, "Uruguai": 1968, "Bélgica": 1965, "Itália": 1934,
+  "Croácia": 1944, "Marrocos": 1925, "Japão": 1934, "Equador": 1916,
+  "Noruega": 1880, "México": 1850, "Estados Unidos": 1838, "Suíça": 1843,
+  "Dinamarca": 1846, "Áustria": 1832, "Senegal": 1812, "Irã": 1814,
+  "Turquia": 1812, "Coreia do Sul": 1796, "Canadá": 1791, "Ucrânia": 1777,
+  "Algéria": 1775, "Paraguai": 1771, "Polônia": 1770, "Sérvia": 1770,
+  "Nigéria": 1770, "Costa do Marfim": 1769, "Austrália": 1762, "Egito": 1750,
+  "Escócia": 1750, "Tunísia": 1742, "Grécia": 1740, "República Tcheca": 1740,
+  "País de Gales": 1730, "Camarões": 1720, "Suécia": 1720, "Hungria": 1700,
+  "Eslováquia": 1700, "Gana": 1700, "Panamá": 1700, "Venezuela": 1700,
+  "Chile": 1700, "África do Sul": 1690, "Romênia": 1690, "Irlanda": 1690,
+  "Uzbequistão": 1684, "Peru": 1680, "Mali": 1680, "Albânia": 1660,
+  "Burkina Faso": 1650, "Jordânia": 1644, "Costa Rica": 1640, "Bolívia": 1640,
+  "RD Congo": 1640, "Arábia Saudita": 1640, "Bósnia": 1640, "Catar": 1633,
+  "Macedônia do Norte": 1620, "Iraque": 1620, "Jamaica": 1600, "Honduras": 1600,
+  "Kosovo": 1600, "Cabo Verde": 1592, "Nova Zelândia": 1590,
+  "Emirados Árabes": 1590, "Curaçao": 1560, "Haiti": 1540
+};
+const ELO_PADRAO = 1620;
+
+/* Nomes usados pelas APIs (ESPN e 365Scores) -> nome canônico em PT */
+const ALIAS = {
+  "Spain": "Espanha", "France": "França", "England": "Inglaterra",
+  "Brazil": "Brasil", "Netherlands": "Holanda", "Germany": "Alemanha",
+  "Colombia": "Colômbia", "Uruguay": "Uruguai", "Belgium": "Bélgica",
+  "Italy": "Itália", "Croatia": "Croácia", "Morocco": "Marrocos",
+  "Japan": "Japão", "Ecuador": "Equador", "Norway": "Noruega",
+  "Mexico": "México", "United States": "Estados Unidos", "USA": "Estados Unidos",
+  "Switzerland": "Suíça", "Denmark": "Dinamarca", "Austria": "Áustria",
+  "Iran": "Irã", "Turkey": "Turquia", "Turkiye": "Turquia", "Türkiye": "Turquia",
+  "South Korea": "Coreia do Sul", "Korea Republic": "Coreia do Sul",
+  "Canada": "Canadá", "Ukraine": "Ucrânia", "Algeria": "Algéria",
+  "Paraguay": "Paraguai", "Poland": "Polônia", "Serbia": "Sérvia",
+  "Nigeria": "Nigéria", "Ivory Coast": "Costa do Marfim", "Cote d'Ivoire": "Costa do Marfim",
+  "Côte d'Ivoire": "Costa do Marfim",
+  "Australia": "Austrália", "Egypt": "Egito", "Scotland": "Escócia",
+  "Tunisia": "Tunísia", "Greece": "Grécia", "Czech Republic": "República Tcheca",
+  "Czechia": "República Tcheca", "Cameroon": "Camarões", "Sweden": "Suécia",
+  "Hungary": "Hungria", "Slovakia": "Eslováquia", "Ghana": "Gana",
+  "Panama": "Panamá", "South Africa": "África do Sul", "Romania": "Romênia",
+  "Republic of Ireland": "Irlanda", "Ireland": "Irlanda",
+  "Uzbekistan": "Uzbequistão", "Albania": "Albânia",
+  "Jordan": "Jordânia", "Bolivia": "Bolívia", "DR Congo": "RD Congo",
+  "Congo DR": "RD Congo", "Saudi Arabia": "Arábia Saudita",
+  "Bosnia and Herzegovina": "Bósnia", "Bosnia-Herzegovina": "Bósnia",
+  "Bosnia & Herzegovina": "Bósnia", "Bosnia": "Bósnia",
+  "Qatar": "Catar", "North Macedonia": "Macedônia do Norte", "Iraq": "Iraque",
+  "Cape Verde": "Cabo Verde", "Cabo Verde Islands": "Cabo Verde",
+  "New Zealand": "Nova Zelândia", "United Arab Emirates": "Emirados Árabes",
+  "UAE": "Emirados Árabes", "Curacao": "Curaçao", "Wales": "País de Gales"
+};
+
+const ANFITRIOES = new Set(["Estados Unidos", "México", "Canadá"]);
+const BONUS_CASA = 80;
+
+/* Pesos de cada fonte no consenso */
+const PESO_PINNACLE = 3.0;  // odds Pinnacle (a casa com odds mais precisas do mercado)
+const PESO_MERCADO = 2.5;   // odds DraftKings
+const PESO_POLY = 2.0;      // Polymarket (mercado de previsões com dinheiro real)
+const PESO_TORCIDA = 1.5;   // votos 365Scores
+const PESO_ELO = 1.5;       // modelo estatístico
+
+const COMP_365 = 5930; // id da Copa do Mundo no 365Scores
+const PIN_KEY = "CmX2KcMrXuFmNg6YFbmTxE0y9CIrOi0R"; // chave pública usada pelo próprio site da Pinnacle
+
+/* Códigos FIFA (usados nos slugs do Polymarket) */
+const FIFA_COD = {
+  "Argentina": "arg", "Espanha": "esp", "França": "fra", "Inglaterra": "eng",
+  "Brasil": "bra", "Portugal": "por", "Holanda": "ned", "Alemanha": "ger",
+  "Colômbia": "col", "Uruguai": "uru", "Bélgica": "bel", "Itália": "ita",
+  "Croácia": "cro", "Marrocos": "mar", "Japão": "jpn", "Equador": "ecu",
+  "Noruega": "nor", "México": "mex", "Estados Unidos": "usa", "Suíça": "sui",
+  "Dinamarca": "den", "Áustria": "aut", "Senegal": "sen", "Irã": "irn",
+  "Turquia": "tur", "Coreia do Sul": "kor", "Canadá": "can", "Ucrânia": "ukr",
+  "Algéria": "alg", "Paraguai": "par", "Polônia": "pol", "Sérvia": "srb",
+  "Nigéria": "nga", "Costa do Marfim": "civ", "Austrália": "aus", "Egito": "egy",
+  "Escócia": "sco", "Tunísia": "tun", "Grécia": "gre", "República Tcheca": "cze",
+  "País de Gales": "wal", "Camarões": "cmr", "Suécia": "swe", "Hungria": "hun",
+  "Eslováquia": "svk", "Gana": "gha", "Panamá": "pan", "Venezuela": "ven",
+  "Chile": "chi", "África do Sul": "rsa", "Romênia": "rou", "Irlanda": "irl",
+  "Uzbequistão": "uzb", "Peru": "per", "Mali": "mli", "Albânia": "alb",
+  "Burkina Faso": "bfa", "Jordânia": "jor", "Costa Rica": "crc", "Bolívia": "bol",
+  "RD Congo": "cod", "Arábia Saudita": "ksa", "Bósnia": "bih", "Catar": "qat",
+  "Macedônia do Norte": "mkd", "Iraque": "irq", "Jamaica": "jam", "Honduras": "hon",
+  "Kosovo": "kos", "Cabo Verde": "cpv", "Nova Zelândia": "nzl",
+  "Emirados Árabes": "uae", "Curaçao": "cuw", "Haiti": "hai"
+};
+
+/* índice de nomes normalizados -> nome PT */
+const NORM_IDX = {};
+const norm = s => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z]/g, "");
+for (const pt of Object.keys(ELO)) NORM_IDX[norm(pt)] = pt;
+for (const [k, v] of Object.entries(ALIAS)) NORM_IDX[norm(k)] = v;
+function nomeBR(apiName) { return NORM_IDX[norm(apiName)] ?? apiName; }
+
+/* ============================================================
+   NÚCLEO MATEMÁTICO: Poisson + Dixon-Coles
+   ============================================================ */
+function fact(n) { let r = 1; for (let i = 2; i <= n; i++) r *= i; return r; }
+function pois(k, l) { return Math.exp(-l) * Math.pow(l, k) / fact(k); }
+
+const RHO = -0.12; // correção Dixon-Coles para placares baixos
+
+function matrizPlacares(lA, lB) {
+  const N = 8, M = [];
+  let soma = 0;
+  for (let i = 0; i < N; i++) {
+    M[i] = [];
+    for (let j = 0; j < N; j++) {
+      let p = pois(i, lA) * pois(j, lB);
+      if (i === 0 && j === 0) p *= 1 - lA * lB * RHO;
+      else if (i === 0 && j === 1) p *= 1 + lA * RHO;
+      else if (i === 1 && j === 0) p *= 1 + lB * RHO;
+      else if (i === 1 && j === 1) p *= 1 - RHO;
+      M[i][j] = p;
+      soma += p;
+    }
+  }
+  let pV = 0, pE = 0, pD = 0, pO25 = 0, pAmbos = 0;
+  const placares = [];
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+    const p = M[i][j] / soma;
+    if (i > j) pV += p; else if (i === j) pE += p; else pD += p;
+    if (i + j > 2.5) pO25 += p;
+    if (i > 0 && j > 0) pAmbos += p;
+    placares.push({ a: i, b: j, p });
+  }
+  placares.sort((x, y) => y.p - x.p);
+  return { lA, lB, pV, pE, pD, pO25, pAmbos, top: placares.slice(0, 6), melhor: placares[0] };
+}
+
+/* total de gols (lambda) que produz determinada prob. de "over k+0.5" */
+function lambdaDaLinha(k, pOver) {
+  const alvo = Math.min(0.9, Math.max(0.1, pOver));
+  let lo = 0.5, hi = 6.0;
+  for (let i = 0; i < 40; i++) {
+    const mid = (lo + hi) / 2;
+    let cdf = 0;
+    for (let t = 0; t <= k; t++) cdf += pois(t, mid);
+    if (1 - cdf < alvo) lo = mid; else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+const lambdaDoOver = pOver => lambdaDaLinha(2, pOver);
+const pOver25DeLambda = l => 1 - Math.exp(-l) * (1 + l + l * l / 2);
+
+/* acha a superioridade de gols d que reproduz pV - pD do consenso */
+function ajustarSupremacia(lTotal, alvoDif) {
+  let lo = -4, hi = 4;
+  for (let i = 0; i < 45; i++) {
+    const mid = (lo + hi) / 2;
+    const lA = Math.max(0.12, (lTotal + mid) / 2);
+    const lB = Math.max(0.12, (lTotal - mid) / 2);
+    const m = matrizPlacares(lA, lB);
+    if (m.pV - m.pD < alvoDif) lo = mid; else hi = mid;
+  }
+  const d = (lo + hi) / 2;
+  return { lA: Math.max(0.12, (lTotal + d) / 2), lB: Math.max(0.12, (lTotal - d) / 2) };
+}
+
+/* previsão só com Elo (usada como fonte e no simulador) */
+function preverElo(nomeA, nomeB, opts = {}) {
+  const totalGols = opts.totalGols ?? 2.5;
+  let eloA = ELO[nomeA] ?? ELO_PADRAO;
+  let eloB = ELO[nomeB] ?? ELO_PADRAO;
+  if (ANFITRIOES.has(nomeA)) eloA += BONUS_CASA;
+  if (ANFITRIOES.has(nomeB)) eloB += BONUS_CASA;
+  const dr = eloA - eloB;
+  const diff = dr * 0.0045;
+  const mu = opts.mataMata ? totalGols * 0.92 : totalGols;
+  const lA = Math.max(0.25, (mu + diff) / 2);
+  const lB = Math.max(0.25, (mu - diff) / 2);
+  return matrizPlacares(lA, lB);
+}
+
+/* ============================================================
+   CONVERSÃO DE ODDS
+   ============================================================ */
+function probAmericana(odds) {
+  if (odds == null) return null;
+  const o = typeof odds === "string" ? parseFloat(odds.replace("+", "")) : odds;
+  if (!isFinite(o) || o === 0) return null;
+  return o < 0 ? -o / (-o + 100) : 100 / (o + 100);
+}
+
+function extrairOddsESPN(comp) {
+  const o = comp.odds?.[0];
+  if (!o) return null;
+  const pegar = n => n?.close?.odds ?? n?.open?.odds;
+  const h = probAmericana(pegar(o.moneyline?.home) ?? o.homeTeamOdds?.moneyLine);
+  const d = probAmericana(pegar(o.moneyline?.draw) ?? o.drawOdds?.moneyLine);
+  const a = probAmericana(pegar(o.moneyline?.away) ?? o.awayTeamOdds?.moneyLine);
+  if (h == null || d == null || a == null) return null;
+  const s = h + d + a; // remove a margem da casa
+  const res = {
+    wdl: [h / s, d / s, a / s], peso: PESO_MERCADO,
+    rotulo: "🏦 " + (o.provider?.displayName ?? "DraftKings")
+  };
+  const pOver = probAmericana(pegar(o.total?.over));
+  const pUnder = probAmericana(pegar(o.total?.under));
+  if (pOver != null && pUnder != null && (o.overUnder ?? 2.5) === 2.5) {
+    res.pOver = pOver / (pOver + pUnder);
+  }
+  return res;
+}
+
+/* ---- Pinnacle: 2 chamadas trazem moneyline + totais de toda a Copa ---- */
+async function buscarPinnacle() {
+  const cfg = { headers: { "X-API-Key": PIN_KEY } };
+  const r = await fetch("https://guest.api.arcadia.pinnacle.com/0.1/sports/29/matchups?withSpecials=false", cfg);
+  if (!r.ok) throw new Error("Pinnacle HTTP " + r.status);
+  const jogos = (await r.json()).filter(m =>
+    m.league?.name === "FIFA - World Cup" && m.participants?.length >= 2);
+  if (!jogos.length) return {};
+
+  const ligas = [...new Set(jogos.map(j => j.league.id))];
+  const mercados = [];
+  await Promise.all(ligas.map(async id => {
+    const rm = await fetch(`https://guest.api.arcadia.pinnacle.com/0.1/leagues/${id}/markets/straight`, cfg);
+    if (rm.ok) mercados.push(...await rm.json());
+  }));
+
+  const porJogo = {};
+  for (const mk of mercados) {
+    if (mk.period !== 0) continue;
+    const slot = porJogo[mk.matchupId] ?? (porJogo[mk.matchupId] = { totais: [] });
+    if (mk.type === "moneyline") slot.ml = mk.prices;
+    else if (mk.type === "total") slot.totais.push(mk);
+  }
+
+  const idx = {};
+  for (const j of jogos) {
+    const home = j.participants.find(p => p.alignment === "home") ?? j.participants[0];
+    const away = j.participants.find(p => p.alignment === "away") ?? j.participants[1];
+    const dados = porJogo[j.id];
+    if (!dados?.ml) continue;
+    const h = probAmericana(dados.ml.find(p => p.designation === "home")?.price);
+    const d = probAmericana(dados.ml.find(p => p.designation === "draw")?.price);
+    const a = probAmericana(dados.ml.find(p => p.designation === "away")?.price);
+    if (h == null || d == null || a == null) continue;
+    const s = h + d + a;
+    const fonte = { wdl: [h / s, d / s, a / s], peso: PESO_PINNACLE, rotulo: "💹 Pinnacle" };
+
+    /* linha de gols terminada em .5 mais próxima de 2.5 */
+    const meias = dados.totais
+      .filter(t => t.points != null && Math.abs(t.points % 1) === 0.5 && t.prices?.length >= 2)
+      .sort((x, y) => Math.abs(x.points - 2.5) - Math.abs(y.points - 2.5));
+    if (meias.length) {
+      const t = meias[0];
+      const po = probAmericana(t.prices.find(p => p.designation === "over")?.price);
+      const pu = probAmericana(t.prices.find(p => p.designation === "under")?.price);
+      if (po != null && pu != null) {
+        fonte.pOver = pOver25DeLambda(lambdaDaLinha(Math.floor(t.points), po / (po + pu)));
+      }
+    }
+    idx[chave(nomeBR(home.name), nomeBR(away.name))] = fonte;
+  }
+  return idx;
+}
+
+/* ---- Polymarket: mercado de previsões por partida ---- */
+function timeDaPergunta(q) {
+  const candidatos = [...Object.keys(ALIAS), ...Object.keys(ELO)]
+    .sort((a, b) => b.length - a.length);
+  const qn = norm(q);
+  for (const c of candidatos) if (qn.includes(norm(c))) return nomeBR(c);
+  return null;
+}
+
+async function buscarPolymarket(jogos) {
+  const idx = {};
+  await Promise.all(jogos.map(async j => {
+    const ca = FIFA_COD[j.nA], cb = FIFA_COD[j.nB];
+    if (!ca || !cb) return;
+    /* o slug usa a data do jogo no fuso do leste dos EUA */
+    const dataET = new Date(j.data).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+    try {
+      const r = await fetch(`https://gamma-api.polymarket.com/events?slug=fifwc-${ca}-${cb}-${dataET}`);
+      if (!r.ok) return;
+      const ev = (await r.json())[0];
+      if (!ev?.markets) return;
+      let pH = null, pD = null, pA = null;
+      for (const mk of ev.markets) {
+        const preco = parseFloat(JSON.parse(mk.outcomePrices ?? "[]")[0]);
+        if (!isFinite(preco)) continue;
+        const q = mk.question ?? "";
+        if (/draw|empate/i.test(q)) { pD = preco; continue; }
+        if (!/win/i.test(q)) continue;
+        const time = timeDaPergunta(q);
+        if (time === j.nA) pH = preco;
+        else if (time === j.nB) pA = preco;
+      }
+      if (pH == null || pD == null || pA == null) return;
+      const s = pH + pD + pA;
+      idx[chave(j.nA, j.nB)] = { wdl: [pH / s, pD / s, pA / s], peso: PESO_POLY, rotulo: "📊 Polymarket" };
+    } catch (_) { /* segue sem essa fonte para o jogo */ }
+  }));
+  return idx;
+}
+
+function extrairVotos365(game) {
+  const preds = game?.predictions ?? [];
+  const res = {};
+  const www = preds.find(p => p.type === 1 && p.options?.length === 3);
+  if (www) {
+    const v = www.options.map(op => op.vote?.percentage ?? 0);
+    const s = v[0] + v[1] + v[2];
+    if (s > 0) {
+      res.wdl = [v[0] / s, v[1] / s, v[2] / s];
+      res.peso = PESO_TORCIDA;
+      res.rotulo = "👥 " + fmtVotos(www.totalVotes) + " palpites";
+    }
+  }
+  const total = preds.find(p => p.type === 3 && (p.title ?? "").includes("2.5"));
+  if (total) {
+    const over = total.options.find(op => /over/i.test(op.name));
+    const under = total.options.find(op => /under/i.test(op.name));
+    if (over && under) {
+      const po = over.vote?.percentage ?? 0, pu = under.vote?.percentage ?? 0;
+      if (po + pu > 0) res.pOver = po / (po + pu);
+    }
+  }
+  return res.wdl ? res : null;
+}
+
+/* ============================================================
+   CONSENSO
+   ============================================================ */
+function consenso(nomeA, nomeB, externas = []) {
+  const fontes = [];
+  const elo = preverElo(nomeA, nomeB);
+  fontes.push({ wdl: [elo.pV, elo.pE, elo.pD], pOver: elo.pO25, peso: PESO_ELO, rotulo: "📈 Modelo Elo" });
+  for (const f of externas) if (f) fontes.push(f);
+
+  let somaPeso = 0;
+  const wdl = [0, 0, 0];
+  let pOver = 0, somaPesoOver = 0;
+  for (const f of fontes) {
+    somaPeso += f.peso;
+    for (let i = 0; i < 3; i++) wdl[i] += f.wdl[i] * f.peso;
+    if (f.pOver != null) { pOver += f.pOver * f.peso; somaPesoOver += f.peso; }
+  }
+  for (let i = 0; i < 3; i++) wdl[i] /= somaPeso;
+  pOver = somaPesoOver > 0 ? pOver / somaPesoOver : 0.45;
+
+  const lTotal = lambdaDoOver(pOver);
+  const { lA, lB } = ajustarSupremacia(lTotal, wdl[0] - wdl[2]);
+  const m = matrizPlacares(lA, lB);
+
+  /* "palpite quente": gols esperados arredondados (o estilo dos sites de previsão) */
+  let qa = Math.round(lA), qb = Math.round(lB);
+  if (qa === qb) {
+    if (wdl[0] - wdl[2] > 0.12) qa++;
+    else if (wdl[2] - wdl[0] > 0.12) qb++;
+  }
+  const quente = { a: qa, b: qb, p: (m.top.concat([{ a: -1 }]).find(s => s.a === qa && s.b === qb)?.p) ?? null };
+
+  return { ...m, wdlCons: wdl, fontes, quente };
+}
+
+const fmtVotos = n => {
+  if (!n) return "";
+  return n >= 1000 ? (n / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + " mil" : String(n);
+};
+
+/* ============================================================
+   RENDERIZAÇÃO
+   ============================================================ */
+const pct = p => (p * 100).toFixed(p >= 0.095 ? 0 : 1) + "%";
+
+function htmlPrevisao(nomeA, nomeB, r) {
+  const temQuente = r.quente && (r.quente.a !== r.melhor.a || r.quente.b !== r.melhor.b);
+  const picks = `
+    <div class="picks">
+      <div class="pick-box main">
+        <div class="pick-label">🎯 Placar mais provável</div>
+        <div class="pick-score">${r.melhor.a} × ${r.melhor.b}</div>
+        <div class="pick-sub">${pct(r.melhor.p)} de chance</div>
+      </div>
+      ${temQuente ? `
+      <div class="pick-box hot">
+        <div class="pick-label">🔥 Palpite quente (gols esperados)</div>
+        <div class="pick-score">${r.quente.a} × ${r.quente.b}</div>
+        <div class="pick-sub">${r.quente.p != null ? pct(r.quente.p) + " de chance · " : ""}xG ${r.lA.toFixed(1)} × ${r.lB.toFixed(1)}</div>
+      </div>` : ""}
+    </div>`;
+
+  const pV = r.wdlCons ? r.wdlCons[0] : r.pV;
+  const pE = r.wdlCons ? r.wdlCons[1] : r.pE;
+  const pD = r.wdlCons ? r.wdlCons[2] : r.pD;
+
+  const chips = (r.fontes ?? []).map(f =>
+    `<span class="fonte-chip">${f.rotulo} · <b>${pct(f.wdl[0])}</b> V / ${pct(f.wdl[1])} E / ${pct(f.wdl[2])} D</span>`
+  ).join("");
+
+  const topRows = r.top.map(s => `
+    <tr>
+      <td class="score-cell">${s.a} × ${s.b}</td>
+      <td>${nomeA} ${s.a} × ${s.b} ${nomeB}</td>
+      <td>${pct(s.p)}<span class="meter" style="width:${Math.round(s.p * 400)}px"></span></td>
+    </tr>`).join("");
+
+  return `${picks}
+    <div class="probs">
+      <div class="prob-bar">
+        <div class="pb-w" style="flex:${pV}">${pct(pV)}</div>
+        <div class="pb-d" style="flex:${pE}">${pct(pE)}</div>
+        <div class="pb-l" style="flex:${pD}">${pct(pD)}</div>
+      </div>
+      <div class="prob-legend">
+        <span>🟢 ${nomeA}</span><span>🟡 Empate</span><span>🔴 ${nomeB}</span>
+      </div>
+    </div>
+    ${chips ? `<div class="fontes">${chips}</div>` : ""}
+    <div class="extras">
+      <span>Gols esperados: <b>${r.lA.toFixed(2)} × ${r.lB.toFixed(2)}</b></span>
+      <span>+2,5 gols: <b>${pct(r.pO25)}</b></span>
+      <span>Ambos marcam: <b>${pct(r.pAmbos)}</b></span>
+    </div>
+    <details>
+      <summary>Ver os 6 placares mais prováveis</summary>
+      <table class="top-scores">${topRows}</table>
+    </details>`;
+}
+
+/* ============================================================
+   BUSCA DE DADOS (ESPN + 365Scores)
+   ============================================================ */
+function fmtData(iso) {
+  return new Date(iso).toLocaleString("pt-BR", {
+    weekday: "short", day: "2-digit", month: "2-digit",
+    hour: "2-digit", minute: "2-digit"
+  });
+}
+const fmtBR = d => `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+const fmtISO = d => d.toISOString().slice(0, 10).replace(/-/g, "");
+const chave = (a, b) => [norm(a), norm(b)].sort().join("|");
+
+async function buscarESPN(ini, fim) {
+  const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=${fmtISO(ini)}-${fmtISO(fim)}&limit=200`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error("ESPN HTTP " + r.status);
+  return ((await r.json()).events ?? []).sort((a, b) => new Date(a.date) - new Date(b.date));
+}
+
+async function buscar365(ini, fim) {
+  const url = `https://webws.365scores.com/web/games/?appTypeId=5&langId=1&timezoneName=America/Sao_Paulo&competitions=${COMP_365}&startDate=${fmtBR(ini)}&endDate=${fmtBR(fim)}`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error("365Scores HTTP " + r.status);
+  const jogos = (await r.json()).games ?? [];
+  /* busca os palpites (detalhe) dos próximos jogos ainda não iniciados, até 24 */
+  const pendentes = jogos.filter(g => g.statusGroup === 2 || /scheduled|agendado/i.test(g.statusText ?? "")).slice(0, 24);
+  await Promise.all(pendentes.map(async g => {
+    try {
+      const d = await fetch(`https://webws.365scores.com/web/game/?appTypeId=5&langId=1&gameId=${g.id}`);
+      if (d.ok) g.predictions = (await d.json()).game?.promotedPredictions?.predictions ?? [];
+    } catch (_) { /* segue sem palpites deste jogo */ }
+  }));
+  const idx = {};
+  for (const g of jogos) {
+    idx[chave(nomeBR(g.homeCompetitor.name), nomeBR(g.awayCompetitor.name))] = g;
+  }
+  return idx;
+}
+
+async function carregarJogos() {
+  const el = document.getElementById("lista-jogos");
+  const hoje = new Date();
+  const fim = new Date(hoje.getTime() + 14 * 864e5);
+
+  const [espn, idx365, idxPin] = await Promise.all([
+    buscarESPN(hoje, fim).catch(e => e),
+    buscar365(hoje, fim).catch(e => e),
+    buscarPinnacle().catch(e => e)
+  ]);
+  const espnOk = Array.isArray(espn);
+  const s365Ok = !(idx365 instanceof Error);
+  const pinOk = !(idxPin instanceof Error);
+
+  if (!espnOk && !s365Ok) {
+    el.innerHTML = `<div class="msg error">⚠️ Nenhuma fonte de jogos respondeu (ESPN: ${espn.message} · 365Scores: ${idx365.message}).<br>
+      Use a aba <b>Simular partida</b> — ela funciona offline.</div>`;
+    return;
+  }
+
+  /* lista unificada de partidas (ESPN preferida; 365Scores como reserva) */
+  let partidas;
+  if (espnOk) {
+    partidas = espn.map(ev => {
+      const comp = ev.competitions[0];
+      const home = comp.competitors.find(c => c.homeAway === "home");
+      const away = comp.competitors.find(c => c.homeAway === "away");
+      return {
+        nA: nomeBR(home.team.displayName), nB: nomeBR(away.team.displayName),
+        data: ev.date, estado: ev.status.type.state, status: ev.status,
+        placar: [home.score, away.score],
+        logoA: home.team.logo, logoB: away.team.logo,
+        comp
+      };
+    });
+  } else {
+    partidas = Object.values(idx365)
+      .sort((a, b) => new Date(a.startTime) - new Date(b.startTime))
+      .map(g => ({
+        nA: nomeBR(g.homeCompetitor.name), nB: nomeBR(g.awayCompetitor.name),
+        data: g.startTime, estado: g.statusGroup === 2 ? "pre" : "outro", g365: g
+      }));
+  }
+  if (!partidas.length) {
+    el.innerHTML = `<div class="msg">Nenhum jogo da Copa nos próximos 14 dias. Use a aba <b>Simular partida</b>.</div>`;
+    return;
+  }
+
+  /* Polymarket: busca os mercados dos próximos jogos ainda não iniciados */
+  const pendentes = partidas.filter(p => p.estado === "pre").slice(0, 24);
+  const idxPoly = await buscarPolymarket(pendentes).catch(() => ({}));
+  const polyOk = Object.keys(idxPoly).length > 0;
+
+  el.innerHTML = partidas.map(p => {
+    const k = chave(p.nA, p.nB);
+    let corpo;
+    if (p.estado === "pre") {
+      const g365 = p.g365 ?? (s365Ok ? idx365[k] : null);
+      const fontes = [
+        pinOk ? idxPin[k] : null,
+        p.comp ? extrairOddsESPN(p.comp) : null,
+        idxPoly[k],
+        g365 ? extrairVotos365(g365) : null
+      ];
+      corpo = htmlPrevisao(p.nA, p.nB, consenso(p.nA, p.nB, fontes));
+    } else if (p.estado === "in") {
+      corpo = `<div class="real-score"><span class="status-live">● AO VIVO ${p.status?.displayClock ?? ""}</span><br>
+               ${p.placar[0]} × ${p.placar[1]}</div>`;
+    } else if (p.estado === "post") {
+      corpo = `<div class="real-score">Final: ${p.placar[0]} × ${p.placar[1]}</div>`;
+    } else {
+      corpo = `<div class="msg">Jogo em andamento ou encerrado — veja o placar no 365Scores.</div>`;
+    }
+
+    const logoA = p.logoA ? `<img src="${p.logoA}" alt="">` : "";
+    const logoB = p.logoB ? `<img src="${p.logoB}" alt="">` : "";
+    return `<div class="card">
+      <div class="match-head">
+        <div class="teams">${logoA} ${p.nA} <span class="vs">vs</span> ${p.nB} ${logoB}</div>
+        <div class="when">${p.estado === "pre" ? "🕐 " + fmtData(p.data) : (p.status?.type?.detail ?? "")}</div>
+      </div>
+      ${corpo}
+    </div>`;
+  }).join("");
+
+  const fontesAtivas = [
+    pinOk && Object.keys(idxPin).length ? "Pinnacle ✓" : "Pinnacle ✗",
+    espnOk ? "DraftKings ✓" : "DraftKings ✗",
+    polyOk ? "Polymarket ✓" : "Polymarket ✗",
+    s365Ok ? "365Scores ✓" : "365Scores ✗",
+    "Elo ✓"
+  ];
+  document.getElementById("refresh-note").textContent =
+    fontesAtivas.join(" · ") + " · atualizado às " + new Date().toLocaleTimeString("pt-BR") + " · recarrega a cada 5 min";
+}
+
+/* ============================================================
+   SIMULADOR MANUAL (Elo)
+   ============================================================ */
+function montarSelects() {
+  const nomes = Object.keys(ELO).sort((a, b) => a.localeCompare(b, "pt"));
+  const opts = nomes.map(n => `<option>${n}</option>`).join("");
+  const sa = document.getElementById("sel-a");
+  const sb = document.getElementById("sel-b");
+  sa.innerHTML = opts; sb.innerHTML = opts;
+  sa.value = "Brasil"; sb.value = "Argentina";
+}
+
+function simular() {
+  const a = document.getElementById("sel-a").value;
+  const b = document.getElementById("sel-b").value;
+  if (a === b) {
+    document.getElementById("sim-result").innerHTML =
+      `<div class="msg error">Escolha duas seleções diferentes 😄</div>`;
+    return;
+  }
+  const r = preverElo(a, b, {
+    mataMata: document.getElementById("chk-mata").checked,
+    totalGols: parseFloat(document.getElementById("rng-gols").value)
+  });
+  document.getElementById("sim-result").innerHTML = `<div class="card">
+    <div class="match-head"><div class="teams">${a} <span class="vs">vs</span> ${b}</div>
+    <div class="when">Elo: ${ELO[a] ?? ELO_PADRAO} × ${ELO[b] ?? ELO_PADRAO}</div></div>
+    ${htmlPrevisao(a, b, r)}
+  </div>`;
+}
+
+/* ============================================================
+   NAVEGAÇÃO
+   ============================================================ */
+function showTab(t) {
+  document.getElementById("sec-jogos").style.display = t === "jogos" ? "" : "none";
+  document.getElementById("sec-sim").style.display = t === "sim" ? "" : "none";
+  document.getElementById("tab-jogos").classList.toggle("active", t === "jogos");
+  document.getElementById("tab-sim").classList.toggle("active", t === "sim");
+}
+
+montarSelects();
+carregarJogos();
+setInterval(carregarJogos, 5 * 60 * 1000);
+</script>
+</body>
+</html>
