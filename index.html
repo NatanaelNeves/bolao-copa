@@ -17,6 +17,7 @@
     --red: #d05050;
     --accent: #58a6ff;
     --hot: #ff7b42;
+    --gold: #e3b341;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -89,11 +90,33 @@
   }
   .pick-box.main { border-color: var(--green); }
   .pick-box.hot { border-color: var(--hot); }
+  .pick-box.best { border-color: var(--gold); }
   .pick-label { font-size: .78rem; color: var(--muted); margin-bottom: 4px; }
   .pick-score { font-size: 2rem; font-weight: 800; letter-spacing: 2px; }
   .pick-box.main .pick-score { color: var(--green); }
   .pick-box.hot .pick-score { color: var(--hot); }
+  .pick-box.best .pick-score { color: var(--gold); }
   .pick-sub { font-size: .75rem; color: var(--muted); margin-top: 4px; }
+  .config-bar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: .88rem;
+    color: var(--muted);
+    padding: 12px 16px;
+  }
+  .config-bar input {
+    width: 58px;
+    background: var(--card2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: .95rem;
+    text-align: center;
+  }
   .probs { margin-top: 12px; }
   .prob-bar {
     display: flex;
@@ -225,6 +248,12 @@
 
 <main>
   <section id="sec-jogos">
+    <div class="card config-bar">
+      ⚙️ Regras do seu bolão: placar exato vale
+      <input id="pts-exato" type="number" min="0" step="1" onchange="salvarPts()"> pts ·
+      acertar só o resultado vale
+      <input id="pts-result" type="number" min="0" step="1" onchange="salvarPts()"> pts
+    </div>
     <div class="refresh-note" id="refresh-note"></div>
     <div id="lista-jogos"><div class="msg">Consultando as fontes…</div></div>
   </section>
@@ -397,7 +426,38 @@ function matrizPlacares(lA, lB) {
     placares.push({ a: i, b: j, p });
   }
   placares.sort((x, y) => y.p - x.p);
-  return { lA, lB, pV, pE, pD, pO25, pAmbos, top: placares.slice(0, 6), melhor: placares[0] };
+  return { lA, lB, pV, pE, pD, pO25, pAmbos, todos: placares, top: placares.slice(0, 6), melhor: placares[0] };
+}
+
+/* ============================================================
+   PONTUAÇÃO DO BOLÃO (configurável, fica salva no navegador)
+   ============================================================ */
+function ptsBolao() {
+  return {
+    exato: Math.max(0, parseFloat(localStorage.getItem("ptsExato") ?? "10") || 0),
+    resultado: Math.max(0, parseFloat(localStorage.getItem("ptsResultado") ?? "5") || 0)
+  };
+}
+
+function salvarPts() {
+  localStorage.setItem("ptsExato", document.getElementById("pts-exato").value || "0");
+  localStorage.setItem("ptsResultado", document.getElementById("pts-result").value || "0");
+  renderizar();
+  document.getElementById("sim-result").innerHTML = "";
+}
+
+function initPts() {
+  const p = ptsBolao();
+  document.getElementById("pts-exato").value = p.exato;
+  document.getElementById("pts-result").value = p.resultado;
+}
+
+/* pontos esperados de cada palpite: P(exato)·ptsExato + (P(resultado) − P(exato))·ptsResultado */
+function rankearPalpites(m, pts) {
+  const probResultado = s => s.a > s.b ? m.pV : s.a === s.b ? m.pE : m.pD;
+  return m.todos
+    .map(s => ({ ...s, e: s.p * pts.exato + (probResultado(s) - s.p) * pts.resultado }))
+    .sort((x, y) => y.e - x.e);
 }
 
 /* total de gols (lambda) que produz determinada prob. de "over k+0.5" */
@@ -640,21 +700,31 @@ const fmtVotos = n => {
 const pct = p => (p * 100).toFixed(p >= 0.095 ? 0 : 1) + "%";
 
 function htmlPrevisao(nomeA, nomeB, r) {
-  const temQuente = r.quente && (r.quente.a !== r.melhor.a || r.quente.b !== r.melhor.b);
-  const picks = `
-    <div class="picks">
+  const pts = ptsBolao();
+  const ranked = rankearPalpites(r, pts);
+  const best = ranked[0];
+  const mesmoPlacar = (x, y) => x && y && x.a === y.a && x.b === y.b;
+  const ePts = s => ranked.find(k => k.a === s.a && k.b === s.b)?.e ?? 0;
+
+  const caixas = [`
+      <div class="pick-box best">
+        <div class="pick-label">🏆 Melhor palpite pro bolão</div>
+        <div class="pick-score">${best.a} × ${best.b}</div>
+        <div class="pick-sub">${best.e.toFixed(1)} pts esperados · ${pct(best.p)} de chance</div>
+      </div>`];
+  if (!mesmoPlacar(r.melhor, best)) caixas.push(`
       <div class="pick-box main">
         <div class="pick-label">🎯 Placar mais provável</div>
         <div class="pick-score">${r.melhor.a} × ${r.melhor.b}</div>
-        <div class="pick-sub">${pct(r.melhor.p)} de chance</div>
-      </div>
-      ${temQuente ? `
+        <div class="pick-sub">${pct(r.melhor.p)} de chance · ${ePts(r.melhor).toFixed(1)} pts esperados</div>
+      </div>`);
+  if (r.quente && !mesmoPlacar(r.quente, best) && !mesmoPlacar(r.quente, r.melhor)) caixas.push(`
       <div class="pick-box hot">
         <div class="pick-label">🔥 Palpite quente (gols esperados)</div>
         <div class="pick-score">${r.quente.a} × ${r.quente.b}</div>
-        <div class="pick-sub">${r.quente.p != null ? pct(r.quente.p) + " de chance · " : ""}xG ${r.lA.toFixed(1)} × ${r.lB.toFixed(1)}</div>
-      </div>` : ""}
-    </div>`;
+        <div class="pick-sub">xG ${r.lA.toFixed(1)} × ${r.lB.toFixed(1)} · ${ePts(r.quente).toFixed(1)} pts esperados</div>
+      </div>`);
+  const picks = `<div class="picks">${caixas.join("")}</div>`;
 
   const pV = r.wdlCons ? r.wdlCons[0] : r.pV;
   const pE = r.wdlCons ? r.wdlCons[1] : r.pE;
@@ -664,10 +734,11 @@ function htmlPrevisao(nomeA, nomeB, r) {
     `<span class="fonte-chip">${f.rotulo} · <b>${pct(f.wdl[0])}</b> V / ${pct(f.wdl[1])} E / ${pct(f.wdl[2])} D</span>`
   ).join("");
 
-  const topRows = r.top.map(s => `
+  const topRows = ranked.slice(0, 8).map(s => `
     <tr>
       <td class="score-cell">${s.a} × ${s.b}</td>
       <td>${nomeA} ${s.a} × ${s.b} ${nomeB}</td>
+      <td><b>${s.e.toFixed(2)} pts</b></td>
       <td>${pct(s.p)}<span class="meter" style="width:${Math.round(s.p * 400)}px"></span></td>
     </tr>`).join("");
 
@@ -689,7 +760,7 @@ function htmlPrevisao(nomeA, nomeB, r) {
       <span>Ambos marcam: <b>${pct(r.pAmbos)}</b></span>
     </div>
     <details>
-      <summary>Ver os 6 placares mais prováveis</summary>
+      <summary>Ver ranking de palpites (pontos esperados no seu bolão)</summary>
       <table class="top-scores">${topRows}</table>
     </details>`;
 }
@@ -732,6 +803,35 @@ async function buscar365(ini, fim) {
     idx[chave(nomeBR(g.homeCompetitor.name), nomeBR(g.awayCompetitor.name))] = g;
   }
   return idx;
+}
+
+let cacheJogos = null;
+
+function renderizar() {
+  if (!cacheJogos) return;
+  document.getElementById("lista-jogos").innerHTML = cacheJogos.map(p => {
+    let corpo;
+    if (p.estado === "pre") {
+      corpo = htmlPrevisao(p.nA, p.nB, consenso(p.nA, p.nB, p.fontes ?? []));
+    } else if (p.estado === "in") {
+      corpo = `<div class="real-score"><span class="status-live">● AO VIVO ${p.status?.displayClock ?? ""}</span><br>
+               ${p.placar[0]} × ${p.placar[1]}</div>`;
+    } else if (p.estado === "post") {
+      corpo = `<div class="real-score">Final: ${p.placar[0]} × ${p.placar[1]}</div>`;
+    } else {
+      corpo = `<div class="msg">Jogo em andamento ou encerrado — veja o placar no 365Scores.</div>`;
+    }
+
+    const logoA = p.logoA ? `<img src="${p.logoA}" alt="">` : "";
+    const logoB = p.logoB ? `<img src="${p.logoB}" alt="">` : "";
+    return `<div class="card">
+      <div class="match-head">
+        <div class="teams">${logoA} ${p.nA} <span class="vs">vs</span> ${p.nB} ${logoB}</div>
+        <div class="when">${p.estado === "pre" ? "🕐 " + fmtData(p.data) : (p.status?.type?.detail ?? "")}</div>
+      </div>
+      ${corpo}
+    </div>`;
+  }).join("");
 }
 
 async function carregarJogos() {
@@ -787,37 +887,20 @@ async function carregarJogos() {
   const idxPoly = await buscarPolymarket(pendentes).catch(() => ({}));
   const polyOk = Object.keys(idxPoly).length > 0;
 
-  el.innerHTML = partidas.map(p => {
+  /* monta as fontes de cada partida e guarda em cache (mudar a pontuação re-renderiza sem nova busca) */
+  for (const p of partidas) {
+    if (p.estado !== "pre") continue;
     const k = chave(p.nA, p.nB);
-    let corpo;
-    if (p.estado === "pre") {
-      const g365 = p.g365 ?? (s365Ok ? idx365[k] : null);
-      const fontes = [
-        pinOk ? idxPin[k] : null,
-        p.comp ? extrairOddsESPN(p.comp) : null,
-        idxPoly[k],
-        g365 ? extrairVotos365(g365) : null
-      ];
-      corpo = htmlPrevisao(p.nA, p.nB, consenso(p.nA, p.nB, fontes));
-    } else if (p.estado === "in") {
-      corpo = `<div class="real-score"><span class="status-live">● AO VIVO ${p.status?.displayClock ?? ""}</span><br>
-               ${p.placar[0]} × ${p.placar[1]}</div>`;
-    } else if (p.estado === "post") {
-      corpo = `<div class="real-score">Final: ${p.placar[0]} × ${p.placar[1]}</div>`;
-    } else {
-      corpo = `<div class="msg">Jogo em andamento ou encerrado — veja o placar no 365Scores.</div>`;
-    }
-
-    const logoA = p.logoA ? `<img src="${p.logoA}" alt="">` : "";
-    const logoB = p.logoB ? `<img src="${p.logoB}" alt="">` : "";
-    return `<div class="card">
-      <div class="match-head">
-        <div class="teams">${logoA} ${p.nA} <span class="vs">vs</span> ${p.nB} ${logoB}</div>
-        <div class="when">${p.estado === "pre" ? "🕐 " + fmtData(p.data) : (p.status?.type?.detail ?? "")}</div>
-      </div>
-      ${corpo}
-    </div>`;
-  }).join("");
+    const g365 = p.g365 ?? (s365Ok ? idx365[k] : null);
+    p.fontes = [
+      pinOk ? idxPin[k] : null,
+      p.comp ? extrairOddsESPN(p.comp) : null,
+      idxPoly[k],
+      g365 ? extrairVotos365(g365) : null
+    ];
+  }
+  cacheJogos = partidas;
+  renderizar();
 
   const fontesAtivas = [
     pinOk && Object.keys(idxPin).length ? "Pinnacle ✓" : "Pinnacle ✗",
@@ -871,6 +954,7 @@ function showTab(t) {
   document.getElementById("tab-sim").classList.toggle("active", t === "sim");
 }
 
+initPts();
 montarSelects();
 carregarJogos();
 setInterval(carregarJogos, 5 * 60 * 1000);
