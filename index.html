@@ -265,6 +265,12 @@
       <input id="b-perd" type="number" min="0" step="1" onchange="salvarPts()">
       <span id="pts-resumo" style="width:100%;text-align:center;font-size:.78rem"></span>
     </div>
+    <div class="card config-bar">
+      🔑 The Odds API — média de 20+ casas de aposta (opcional):
+      <input id="odds-key" type="password" placeholder="cole sua chave aqui" style="width:230px;text-align:left"
+             onchange="salvarOddsKey()">
+      <span id="odds-status"></span>
+    </div>
     <div class="refresh-note" id="refresh-note"></div>
     <div id="lista-jogos"><div class="msg">Consultando as fontes…</div></div>
   </section>
@@ -296,8 +302,9 @@
 <footer>
   <b>Como o consenso é calculado:</b> cada fonte vira probabilidades de vitória/empate/derrota, sem a margem da casa:
   💹 Pinnacle (peso 3 — a casa de referência do mercado), 🏦 DraftKings via ESPN (peso 2,5),
+  🌍 média de ~20 casas via The Odds API (peso 2,5 — opcional, com chave gratuita que fica só no seu navegador),
   📊 Polymarket (peso 2 — mercado de previsões com dinheiro real), 👥 votos da torcida no 365Scores (peso 1,5)
-  e 📈 modelo Elo + Poisson (peso 1,5). A média ponderada gera a matriz de placares
+  e 📈 modelo Elo + Poisson (peso 1,5). Os mercados de gols por time da Pinnacle afinam o placar exato. A média ponderada gera a matriz de placares
   (Poisson com correção Dixon-Coles), de onde saem o placar mais provável e o palpite quente.<br>
   Probabilidades são estimativas — o palpite final é seu. Boa sorte no bolão! 🍀
 </footer>
@@ -366,6 +373,7 @@ const BONUS_CASA = 80;
 
 /* Pesos de cada fonte no consenso */
 const PESO_PINNACLE = 3.0;  // odds Pinnacle (a casa com odds mais precisas do mercado)
+const PESO_MULTI = 2.5;     // média de ~20 casas via The Odds API (opcional, precisa de chave)
 const PESO_MERCADO = 2.5;   // odds DraftKings
 const PESO_POLY = 2.0;      // Polymarket (mercado de previsões com dinheiro real)
 const PESO_TORCIDA = 1.5;   // votos 365Scores
@@ -694,6 +702,58 @@ async function buscarPinnacle() {
   return idx;
 }
 
+/* ---- The Odds API: média de ~20 casas (chave do usuário, fica só no navegador) ----
+   500 créditos/mês no plano grátis; 1 busca em lote custa 2, então o resultado
+   fica em cache por 12h e o refresh automático de 5 min NÃO gasta créditos. */
+function salvarOddsKey() {
+  const v = document.getElementById("odds-key").value.trim();
+  if (v) localStorage.setItem("oddsApiKey", v); else localStorage.removeItem("oddsApiKey");
+  localStorage.removeItem("oddsApiCache");
+  document.getElementById("lista-jogos").innerHTML = '<div class="msg">Consultando as fontes…</div>';
+  carregarJogos();
+}
+
+async function buscarOddsApi() {
+  const key = localStorage.getItem("oddsApiKey");
+  if (!key) return null; // fonte desativada
+  const cache = JSON.parse(localStorage.getItem("oddsApiCache") ?? "null");
+  if (cache && Date.now() - cache.ts < 12 * 3600 * 1000) return cache.idx;
+
+  const r = await fetch("https://api.the-odds-api.com/v4/sports/soccer_fifa_world_cup/odds/" +
+    `?apiKey=${encodeURIComponent(key)}&regions=eu&markets=h2h,totals&oddsFormat=decimal`);
+  if (!r.ok) throw new Error("The Odds API HTTP " + r.status);
+  const eventos = await r.json();
+
+  const idx = {};
+  for (const ev of eventos) {
+    let sH = 0, sD = 0, sA = 0, n = 0, sOver = 0, nOver = 0;
+    for (const bm of ev.bookmakers ?? []) {
+      if (bm.key === "pinnacle" || bm.key === "draftkings") continue; // já são fontes próprias
+      for (const mk of bm.markets ?? []) {
+        if (mk.key === "h2h") {
+          const oH = mk.outcomes.find(o => o.name === ev.home_team)?.price;
+          const oD = mk.outcomes.find(o => o.name === "Draw")?.price;
+          const oA = mk.outcomes.find(o => o.name === ev.away_team)?.price;
+          if (oH > 1 && oD > 1 && oA > 1) {
+            const h = 1 / oH, d = 1 / oD, a = 1 / oA, s = h + d + a;
+            sH += h / s; sD += d / s; sA += a / s; n++;
+          }
+        } else if (mk.key === "totals") {
+          const ov = mk.outcomes.find(o => o.name === "Over" && o.point === 2.5)?.price;
+          const un = mk.outcomes.find(o => o.name === "Under" && o.point === 2.5)?.price;
+          if (ov > 1 && un > 1) { sOver += (1 / ov) / (1 / ov + 1 / un); nOver++; }
+        }
+      }
+    }
+    if (!n) continue;
+    const fonte = { wdl: [sH / n, sD / n, sA / n], peso: PESO_MULTI, rotulo: "🌍 média de " + n + " casas" };
+    if (nOver) fonte.pOver = sOver / nOver;
+    idx[chave(nomeBR(ev.home_team), nomeBR(ev.away_team))] = fonte;
+  }
+  localStorage.setItem("oddsApiCache", JSON.stringify({ ts: Date.now(), idx }));
+  return idx;
+}
+
 /* ---- Polymarket: mercado de previsões por partida ---- */
 function timeDaPergunta(q) {
   const candidatos = [...Object.keys(ALIAS), ...Object.keys(ELO)]
@@ -959,14 +1019,17 @@ async function carregarJogos() {
   const hoje = new Date();
   const fim = new Date(hoje.getTime() + 14 * 864e5);
 
-  const [espn, idx365, idxPin] = await Promise.all([
+  const [espn, idx365, idxPin, idxMulti] = await Promise.all([
     buscarESPN(hoje, fim).catch(e => e),
     buscar365(hoje, fim).catch(e => e),
-    buscarPinnacle().catch(e => e)
+    buscarPinnacle().catch(e => e),
+    buscarOddsApi().catch(e => e)
   ]);
   const espnOk = Array.isArray(espn);
   const s365Ok = !(idx365 instanceof Error);
   const pinOk = !(idxPin instanceof Error);
+  const multiErro = idxMulti instanceof Error;
+  const multi = (!multiErro && idxMulti) ? idxMulti : {};
 
   if (!espnOk && !s365Ok) {
     el.innerHTML = `<div class="msg error">⚠️ Nenhuma fonte de jogos respondeu (ESPN: ${espn.message} · 365Scores: ${idx365.message}).<br>
@@ -1015,6 +1078,7 @@ async function carregarJogos() {
     p.fontes = [
       pinOk ? idxPin[k] : null,
       p.comp ? extrairOddsESPN(p.comp) : null,
+      multi[k],
       idxPoly[k],
       g365 ? extrairVotos365(g365) : null
     ];
@@ -1022,15 +1086,19 @@ async function carregarJogos() {
   cacheJogos = partidas;
   renderizar();
 
+  const temChave = !!localStorage.getItem("oddsApiKey");
   const fontesAtivas = [
     pinOk && Object.keys(idxPin).length ? "Pinnacle ✓" : "Pinnacle ✗",
     espnOk ? "DraftKings ✓" : "DraftKings ✗",
+    !temChave ? "Multi-casas (sem chave)" : multiErro ? "Multi-casas ✗" : "Multi-casas ✓",
     polyOk ? "Polymarket ✓" : "Polymarket ✗",
     s365Ok ? "365Scores ✓" : "365Scores ✗",
     "Elo ✓"
   ];
   document.getElementById("refresh-note").textContent =
     fontesAtivas.join(" · ") + " · atualizado às " + new Date().toLocaleTimeString("pt-BR") + " · recarrega a cada 5 min";
+  document.getElementById("odds-status").textContent =
+    !temChave ? "" : multiErro ? "⚠️ chave inválida ou créditos esgotados" : "✓ ativa (cache de 12h, ~120 créditos/mês)";
 }
 
 /* ============================================================
@@ -1075,6 +1143,7 @@ function showTab(t) {
 }
 
 initPts();
+document.getElementById("odds-key").value = localStorage.getItem("oddsApiKey") ?? "";
 montarSelects();
 carregarJogos();
 setInterval(carregarJogos, 5 * 60 * 1000);
