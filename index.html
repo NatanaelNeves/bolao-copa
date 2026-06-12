@@ -249,10 +249,15 @@
 <main>
   <section id="sec-jogos">
     <div class="card config-bar">
-      ⚙️ Regras do seu bolão: placar exato vale
-      <input id="pts-exato" type="number" min="0" step="1" onchange="salvarPts()"> pts ·
-      acertar só o resultado vale
-      <input id="pts-result" type="number" min="0" step="1" onchange="salvarPts()"> pts
+      ⚙️ Pontos do seu bolão (somam entre si): vencedor/empate
+      <input id="pts-venc" type="number" min="0" step="1" onchange="salvarPts()"> ·
+      diferença de gols
+      <input id="pts-diff" type="number" min="0" step="1" onchange="salvarPts()"> ·
+      gols do perdedor
+      <input id="pts-perd" type="number" min="0" step="1" onchange="salvarPts()"> ·
+      bônus por cravar
+      <input id="pts-bonus" type="number" min="0" step="1" onchange="salvarPts()">
+      <span id="pts-resumo" style="width:100%;text-align:center;font-size:.78rem"></span>
     </div>
     <div class="refresh-note" id="refresh-note"></div>
     <div id="lista-jogos"><div class="msg">Consultando as fontes…</div></div>
@@ -432,32 +437,64 @@ function matrizPlacares(lA, lB) {
 /* ============================================================
    PONTUAÇÃO DO BOLÃO (configurável, fica salva no navegador)
    ============================================================ */
+const PTS_CAMPOS = [
+  { id: "pts-venc", chave: "ptsVenc", padrao: 3 },   // acertou vencedor (ou empate)
+  { id: "pts-diff", chave: "ptsDiff", padrao: 2 },   // acertou a diferença de gols
+  { id: "pts-perd", chave: "ptsPerd", padrao: 0 },   // acertou os gols do perdedor
+  { id: "pts-bonus", chave: "ptsBonus", padrao: 0 }  // bônus extra por cravar o placar
+];
+
 function ptsBolao() {
-  return {
-    exato: Math.max(0, parseFloat(localStorage.getItem("ptsExato") ?? "10") || 0),
-    resultado: Math.max(0, parseFloat(localStorage.getItem("ptsResultado") ?? "5") || 0)
-  };
+  const p = {};
+  for (const c of PTS_CAMPOS) {
+    p[c.chave] = Math.max(0, parseFloat(localStorage.getItem(c.chave) ?? c.padrao) || 0);
+  }
+  return p;
 }
 
 function salvarPts() {
-  localStorage.setItem("ptsExato", document.getElementById("pts-exato").value || "0");
-  localStorage.setItem("ptsResultado", document.getElementById("pts-result").value || "0");
+  for (const c of PTS_CAMPOS) {
+    localStorage.setItem(c.chave, document.getElementById(c.id).value || "0");
+  }
+  initPts();
   renderizar();
   document.getElementById("sim-result").innerHTML = "";
 }
 
 function initPts() {
   const p = ptsBolao();
-  document.getElementById("pts-exato").value = p.exato;
-  document.getElementById("pts-result").value = p.resultado;
+  for (const c of PTS_CAMPOS) document.getElementById(c.id).value = p[c.chave];
+  document.getElementById("pts-resumo").textContent =
+    "cravar o placar = " + (p.ptsVenc + p.ptsDiff + p.ptsPerd + p.ptsBonus) + " pts";
 }
 
-/* pontos esperados de cada palpite: P(exato)·ptsExato + (P(resultado) − P(exato))·ptsResultado */
+/* pontos esperados de cada palpite, com as categorias somando entre si:
+   vencedor certo + diferença de gols certa + gols do perdedor certos + bônus por cravar */
 function rankearPalpites(m, pts) {
+  /* distribuições auxiliares a partir da matriz de placares */
+  const probDiff = {};                       // P(diferença de gols == d)
+  const perdedorCasaVence = {};              // vitória do mandante com perdedor fazendo j gols
+  const perdedorForaVence = {};              // vitória do visitante com perdedor fazendo i gols
+  for (const s of m.todos) {
+    const d = s.a - s.b;
+    probDiff[d] = (probDiff[d] ?? 0) + s.p;
+    if (d > 0) perdedorCasaVence[s.b] = (perdedorCasaVence[s.b] ?? 0) + s.p;
+    else if (d < 0) perdedorForaVence[s.a] = (perdedorForaVence[s.a] ?? 0) + s.p;
+  }
   const probResultado = s => s.a > s.b ? m.pV : s.a === s.b ? m.pE : m.pD;
+  const probPerdedor = s =>
+    s.a > s.b ? (perdedorCasaVence[s.b] ?? 0) :
+    s.a < s.b ? (perdedorForaVence[s.a] ?? 0) : 0; // empate não tem perdedor
+
   return m.todos
-    .map(s => ({ ...s, e: s.p * pts.exato + (probResultado(s) - s.p) * pts.resultado }))
-    .sort((x, y) => y.e - x.e);
+    .map(s => ({
+      ...s,
+      e: pts.ptsVenc * probResultado(s) +
+         pts.ptsDiff * (probDiff[s.a - s.b] ?? 0) +
+         pts.ptsPerd * probPerdedor(s) +
+         pts.ptsBonus * s.p
+    }))
+    .sort((x, y) => (y.e - x.e) || (y.p - x.p)); // empate em pontos: vence o placar mais provável
 }
 
 /* total de gols (lambda) que produz determinada prob. de "over k+0.5" */
@@ -734,7 +771,7 @@ function htmlPrevisao(nomeA, nomeB, r) {
     `<span class="fonte-chip">${f.rotulo} · <b>${pct(f.wdl[0])}</b> V / ${pct(f.wdl[1])} E / ${pct(f.wdl[2])} D</span>`
   ).join("");
 
-  const topRows = ranked.slice(0, 8).map(s => `
+  const topRows = ranked.filter(s => s.p >= 0.01).slice(0, 8).map(s => `
     <tr>
       <td class="score-cell">${s.a} × ${s.b}</td>
       <td>${nomeA} ${s.a} × ${s.b} ${nomeB}</td>
