@@ -13,10 +13,13 @@ App web que sugere o placar mais provável de cada jogo da Copa do Mundo 2026, c
 A média ponderada das probabilidades de vitória/empate/derrota e de gols esperados alimenta uma
 **distribuição de Poisson com correção Dixon-Coles**, que gera a matriz de placares exatos. De lá saem:
 
+- 🏆 **Melhor palpite pro bolão** — maximiza os pontos esperados segundo as regras configuráveis
+  do seu bolão (pontos base dinâmicos pela probabilidade, em que zebra vale mais, + bônus por
+  cravar o placar, gols do vencedor, diferença de gols e gols do perdedor)
 - 🎯 **Placar mais provável** (máximo estatístico da matriz)
 - 🔥 **Palpite quente** (gols esperados arredondados — o estilo dos sites de previsão)
 - Probabilidades de vitória/empate/derrota, +2,5 gols e "ambos marcam"
-- Os 6 placares mais prováveis de cada jogo
+- Ranking de palpites por pontos esperados em cada jogo
 
 ## Como usar
 

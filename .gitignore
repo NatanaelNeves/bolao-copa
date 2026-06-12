@@ -1,0 +1,4 @@
+# imagens pessoais (prints de regras etc.) ficam só na máquina local
+*.jpeg
+*.jpg
+*.png

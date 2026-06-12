@@ -249,14 +249,17 @@
 <main>
   <section id="sec-jogos">
     <div class="card config-bar">
-      ⚙️ Pontos do seu bolão (somam entre si): vencedor/empate
-      <input id="pts-venc" type="number" min="0" step="1" onchange="salvarPts()"> ·
+      ⚙️ Regras do bolão — pontos base de
+      <input id="base-min" type="number" min="0" step="1" onchange="salvarPts()"> a
+      <input id="base-max" type="number" min="1" step="1" onchange="salvarPts()">
+      pela probabilidade (zebra vale mais) · bônus: cravar
+      <input id="b-exato" type="number" min="0" step="1" onchange="salvarPts()"> ·
+      placar do vencedor
+      <input id="b-venc" type="number" min="0" step="1" onchange="salvarPts()"> ·
       diferença de gols
-      <input id="pts-diff" type="number" min="0" step="1" onchange="salvarPts()"> ·
-      gols do perdedor
-      <input id="pts-perd" type="number" min="0" step="1" onchange="salvarPts()"> ·
-      bônus por cravar
-      <input id="pts-bonus" type="number" min="0" step="1" onchange="salvarPts()">
+      <input id="b-diff" type="number" min="0" step="1" onchange="salvarPts()"> ·
+      placar do perdedor
+      <input id="b-perd" type="number" min="0" step="1" onchange="salvarPts()">
       <span id="pts-resumo" style="width:100%;text-align:center;font-size:.78rem"></span>
     </div>
     <div class="refresh-note" id="refresh-note"></div>
@@ -438,10 +441,12 @@ function matrizPlacares(lA, lB) {
    PONTUAÇÃO DO BOLÃO (configurável, fica salva no navegador)
    ============================================================ */
 const PTS_CAMPOS = [
-  { id: "pts-venc", chave: "ptsVenc", padrao: 3 },   // acertou vencedor (ou empate)
-  { id: "pts-diff", chave: "ptsDiff", padrao: 2 },   // acertou a diferença de gols
-  { id: "pts-perd", chave: "ptsPerd", padrao: 0 },   // acertou os gols do perdedor
-  { id: "pts-bonus", chave: "ptsBonus", padrao: 0 }  // bônus extra por cravar o placar
+  { id: "base-min", chave: "baseMin", padrao: 1 },  // piso dos pontos base
+  { id: "base-max", chave: "baseMax", padrao: 20 }, // teto dos pontos base
+  { id: "b-exato", chave: "bExato", padrao: 5 },    // bônus: cravou o placar
+  { id: "b-venc", chave: "bVenc", padrao: 3 },      // bônus: gols do vencedor certos
+  { id: "b-diff", chave: "bDiff", padrao: 2 },      // bônus: diferença de gols certa
+  { id: "b-perd", chave: "bPerd", padrao: 0 }       // bônus: gols do perdedor certos
 ];
 
 function ptsBolao() {
@@ -465,36 +470,71 @@ function initPts() {
   const p = ptsBolao();
   for (const c of PTS_CAMPOS) document.getElementById(c.id).value = p[c.chave];
   document.getElementById("pts-resumo").textContent =
-    "cravar o placar = " + (p.ptsVenc + p.ptsDiff + p.ptsPerd + p.ptsBonus) + " pts";
+    "quem crava o placar leva os pontos base do resultado + " +
+    (p.bExato + p.bVenc + p.bDiff + p.bPerd) + " de bônus";
 }
 
-/* pontos esperados de cada palpite, com as categorias somando entre si:
-   vencedor certo + diferença de gols certa + gols do perdedor certos + bônus por cravar */
+/* Curva dos pontos base da plataforma (probabilidade do resultado -> pontos),
+   calibrada com os valores reais dos prints do grupo (escala 1 a 20):
+   80%->2, 53%->5, 27%->8, 21%->10, 15%->11, 5%->16 */
+const CURVA_BASE = [
+  [0.01, 20], [0.05, 16], [0.15, 11], [0.21, 10],
+  [0.27, 8], [0.53, 5], [0.80, 2], [0.95, 1]
+];
+
+function pontosBase(prob, pts) {
+  const p = Math.min(0.95, Math.max(0.01, prob));
+  let v = CURVA_BASE[CURVA_BASE.length - 1][1];
+  for (let i = 0; i < CURVA_BASE.length - 1; i++) {
+    const [p1, v1] = CURVA_BASE[i], [p2, v2] = CURVA_BASE[i + 1];
+    if (p <= p2) { v = v1 + (v2 - v1) * (p - p1) / (p2 - p1); break; }
+  }
+  /* reescala da curva (1..20) para o min/max configurado */
+  const f = (v - 1) / 19;
+  return Math.round(Math.min(pts.baseMax, Math.max(pts.baseMin, pts.baseMin + (pts.baseMax - pts.baseMin) * f)));
+}
+
+/* pontos esperados de cada palpite:
+   base (se acertar o resultado, valor pela probabilidade) + bônus que somam:
+   cravar, gols do vencedor, diferença de gols, gols do perdedor */
 function rankearPalpites(m, pts) {
-  /* distribuições auxiliares a partir da matriz de placares */
-  const probDiff = {};                       // P(diferença de gols == d)
-  const perdedorCasaVence = {};              // vitória do mandante com perdedor fazendo j gols
-  const perdedorForaVence = {};              // vitória do visitante com perdedor fazendo i gols
+  const probDiff = {};       // P(diferença de gols == d)
+  const golsVencCasa = {};   // mandante vence fazendo i gols
+  const golsVencFora = {};   // visitante vence fazendo j gols
+  const golsPerdCasa = {};   // mandante vence com perdedor fazendo j gols
+  const golsPerdFora = {};   // visitante vence com perdedor fazendo i gols
   for (const s of m.todos) {
     const d = s.a - s.b;
     probDiff[d] = (probDiff[d] ?? 0) + s.p;
-    if (d > 0) perdedorCasaVence[s.b] = (perdedorCasaVence[s.b] ?? 0) + s.p;
-    else if (d < 0) perdedorForaVence[s.a] = (perdedorForaVence[s.a] ?? 0) + s.p;
+    if (d > 0) {
+      golsVencCasa[s.a] = (golsVencCasa[s.a] ?? 0) + s.p;
+      golsPerdCasa[s.b] = (golsPerdCasa[s.b] ?? 0) + s.p;
+    } else if (d < 0) {
+      golsVencFora[s.b] = (golsVencFora[s.b] ?? 0) + s.p;
+      golsPerdFora[s.a] = (golsPerdFora[s.a] ?? 0) + s.p;
+    }
   }
-  const probResultado = s => s.a > s.b ? m.pV : s.a === s.b ? m.pE : m.pD;
-  const probPerdedor = s =>
-    s.a > s.b ? (perdedorCasaVence[s.b] ?? 0) :
-    s.a < s.b ? (perdedorForaVence[s.a] ?? 0) : 0; // empate não tem perdedor
+  const baseV = pontosBase(m.pV, pts), baseE = pontosBase(m.pE, pts), baseD = pontosBase(m.pD, pts);
 
   return m.todos
-    .map(s => ({
-      ...s,
-      e: pts.ptsVenc * probResultado(s) +
-         pts.ptsDiff * (probDiff[s.a - s.b] ?? 0) +
-         pts.ptsPerd * probPerdedor(s) +
-         pts.ptsBonus * s.p
-    }))
-    .sort((x, y) => (y.e - x.e) || (y.p - x.p)); // empate em pontos: vence o placar mais provável
+    .map(s => {
+      const d = s.a - s.b;
+      let e;
+      if (d > 0) {
+        e = m.pV * baseV +
+            pts.bVenc * (golsVencCasa[s.a] ?? 0) +
+            pts.bPerd * (golsPerdCasa[s.b] ?? 0);
+      } else if (d < 0) {
+        e = m.pD * baseD +
+            pts.bVenc * (golsVencFora[s.b] ?? 0) +
+            pts.bPerd * (golsPerdFora[s.a] ?? 0);
+      } else {
+        e = m.pE * baseE; // empate: não há vencedor nem perdedor
+      }
+      e += pts.bDiff * (probDiff[d] ?? 0) + pts.bExato * s.p;
+      return { ...s, e, base: d > 0 ? baseV : d < 0 ? baseD : baseE };
+    })
+    .sort((x, y) => (y.e - x.e) || (y.p - x.p)); // empate: vence o placar mais provável
 }
 
 /* total de gols (lambda) que produz determinada prob. de "over k+0.5" */
@@ -792,6 +832,7 @@ function htmlPrevisao(nomeA, nomeB, r) {
     </div>
     ${chips ? `<div class="fontes">${chips}</div>` : ""}
     <div class="extras">
+      <span>Pts base se acertar (V/E/D): <b>${pontosBase(pV, pts)} / ${pontosBase(pE, pts)} / ${pontosBase(pD, pts)}</b></span>
       <span>Gols esperados: <b>${r.lA.toFixed(2)} × ${r.lB.toFixed(2)}</b></span>
       <span>+2,5 gols: <b>${pct(r.pO25)}</b></span>
       <span>Ambos marcam: <b>${pct(r.pAmbos)}</b></span>
