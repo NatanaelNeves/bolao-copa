@@ -171,6 +171,9 @@
   .extras b { color: var(--text); }
   details { margin-top: 12px; }
   summary { cursor: pointer; color: var(--accent); font-size: .9rem; user-select: none; }
+  .rank-grid { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px; }
+  .rank-col { flex: 1; min-width: 230px; }
+  .rank-tit { font-size: .8rem; color: var(--muted); font-weight: 600; margin-bottom: 4px; }
   table.top-scores { width: 100%; margin-top: 10px; border-collapse: collapse; font-size: .9rem; }
   table.top-scores td { padding: 6px 10px; border-bottom: 1px solid var(--border); }
   table.top-scores td:last-child { text-align: right; color: var(--muted); white-space: nowrap; }
@@ -540,7 +543,7 @@ function rankearPalpites(m, pts) {
 /* total de gols (lambda) que produz determinada prob. de "over k+0.5" */
 function lambdaDaLinha(k, pOver) {
   const alvo = Math.min(0.9, Math.max(0.1, pOver));
-  let lo = 0.5, hi = 6.0;
+  let lo = 0.1, hi = 6.0;
   for (let i = 0; i < 40; i++) {
     const mid = (lo + hi) / 2;
     let cdf = 0;
@@ -612,6 +615,22 @@ function extrairOddsESPN(comp) {
   return res;
 }
 
+/* gols esperados de um time a partir dos mercados de "team total" (linhas .5) */
+function lambdaTimePin(mercados) {
+  if (!mercados?.length) return null;
+  const lambdas = [];
+  for (const t of mercados) {
+    const linha = t.prices?.[0]?.points;
+    if (linha == null || Math.abs(linha % 1) !== 0.5) continue;
+    const po = probAmericana(t.prices.find(p => p.designation === "over")?.price);
+    const pu = probAmericana(t.prices.find(p => p.designation === "under")?.price);
+    if (po == null || pu == null) continue;
+    lambdas.push(lambdaDaLinha(Math.floor(linha), po / (po + pu)));
+  }
+  if (!lambdas.length) return null;
+  return lambdas.reduce((s, x) => s + x, 0) / lambdas.length;
+}
+
 /* ---- Pinnacle: 2 chamadas trazem moneyline + totais de toda a Copa ---- */
 async function buscarPinnacle() {
   const cfg = { headers: { "X-API-Key": PIN_KEY } };
@@ -631,9 +650,10 @@ async function buscarPinnacle() {
   const porJogo = {};
   for (const mk of mercados) {
     if (mk.period !== 0) continue;
-    const slot = porJogo[mk.matchupId] ?? (porJogo[mk.matchupId] = { totais: [] });
+    const slot = porJogo[mk.matchupId] ?? (porJogo[mk.matchupId] = { totais: [], tt: { home: [], away: [] } });
     if (mk.type === "moneyline") slot.ml = mk.prices;
     else if (mk.type === "total") slot.totais.push(mk);
+    else if (mk.type === "team_total" && slot.tt[mk.side]) slot.tt[mk.side].push(mk);
   }
 
   const idx = {};
@@ -648,6 +668,14 @@ async function buscarPinnacle() {
     if (h == null || d == null || a == null) continue;
     const s = h + d + a;
     const fonte = { wdl: [h / s, d / s, a / s], peso: PESO_PINNACLE, rotulo: "💹 Pinnacle" };
+
+    /* gols esperados por time (mercados de team total) — afinam o placar exato */
+    const lamCasa = lambdaTimePin(dados.tt?.home);
+    const lamFora = lambdaTimePin(dados.tt?.away);
+    if (lamCasa != null && lamFora != null) {
+      fonte.lamA = lamCasa;
+      fonte.lamB = lamFora;
+    }
 
     /* linha de gols terminada em .5 mais próxima de 2.5 */
     const meias = dados.totais
@@ -752,8 +780,16 @@ function consenso(nomeA, nomeB, externas = []) {
   pOver = somaPesoOver > 0 ? pOver / somaPesoOver : 0.45;
 
   const lTotal = lambdaDoOver(pOver);
-  const { lA, lB } = ajustarSupremacia(lTotal, wdl[0] - wdl[2]);
+  let { lA, lB } = ajustarSupremacia(lTotal, wdl[0] - wdl[2]);
+
+  /* mercados de gols por time (Pinnacle) afinam o xG de cada lado: média 50/50 com o ajuste */
+  const xgMercado = fontes.find(f => f.lamA != null);
+  if (xgMercado) {
+    lA = (lA + xgMercado.lamA) / 2;
+    lB = (lB + xgMercado.lamB) / 2;
+  }
   const m = matrizPlacares(lA, lB);
+  m.xgMercado = !!xgMercado;
 
   /* "palpite quente": gols esperados arredondados (o estilo dos sites de previsão) */
   let qa = Math.round(lA), qb = Math.round(lB);
@@ -811,13 +847,10 @@ function htmlPrevisao(nomeA, nomeB, r) {
     `<span class="fonte-chip">${f.rotulo} · <b>${pct(f.wdl[0])}</b> V / ${pct(f.wdl[1])} E / ${pct(f.wdl[2])} D</span>`
   ).join("");
 
-  const topRows = ranked.filter(s => s.p >= 0.01).slice(0, 8).map(s => `
-    <tr>
-      <td class="score-cell">${s.a} × ${s.b}</td>
-      <td>${nomeA} ${s.a} × ${s.b} ${nomeB}</td>
-      <td><b>${s.e.toFixed(2)} pts</b></td>
-      <td>${pct(s.p)}<span class="meter" style="width:${Math.round(s.p * 400)}px"></span></td>
-    </tr>`).join("");
+  const porProb = [...ranked].sort((x, y) => y.p - x.p).slice(0, 6);
+  const porPts = ranked.filter(s => s.p >= 0.01).slice(0, 6);
+  const linhaProb = s => `<tr><td class="score-cell">${s.a} × ${s.b}</td><td><b>${pct(s.p)}</b></td><td>${s.e.toFixed(2)} pts</td></tr>`;
+  const linhaPts = s => `<tr><td class="score-cell">${s.a} × ${s.b}</td><td><b>${s.e.toFixed(2)} pts</b></td><td>${pct(s.p)}</td></tr>`;
 
   return `${picks}
     <div class="probs">
@@ -833,13 +866,22 @@ function htmlPrevisao(nomeA, nomeB, r) {
     ${chips ? `<div class="fontes">${chips}</div>` : ""}
     <div class="extras">
       <span>Pts base se acertar (V/E/D): <b>${pontosBase(pV, pts)} / ${pontosBase(pE, pts)} / ${pontosBase(pD, pts)}</b></span>
-      <span>Gols esperados: <b>${r.lA.toFixed(2)} × ${r.lB.toFixed(2)}</b></span>
+      <span>Gols esperados: <b>${r.lA.toFixed(2)} × ${r.lB.toFixed(2)}</b>${r.xgMercado ? " ✓ mercado de gols por time" : ""}</span>
       <span>+2,5 gols: <b>${pct(r.pO25)}</b></span>
       <span>Ambos marcam: <b>${pct(r.pAmbos)}</b></span>
     </div>
     <details>
-      <summary>Ver ranking de palpites (pontos esperados no seu bolão)</summary>
-      <table class="top-scores">${topRows}</table>
+      <summary>Estatísticas completas: probabilidade × pontos esperados</summary>
+      <div class="rank-grid">
+        <div class="rank-col">
+          <div class="rank-tit">📊 Mais prováveis de acontecer</div>
+          <table class="top-scores">${porProb.map(linhaProb).join("")}</table>
+        </div>
+        <div class="rank-col">
+          <div class="rank-tit">🏆 Mais pontos esperados no bolão</div>
+          <table class="top-scores">${porPts.map(linhaPts).join("")}</table>
+        </div>
+      </div>
     </details>`;
 }
 
