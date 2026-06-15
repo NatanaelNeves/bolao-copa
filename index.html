@@ -97,6 +97,17 @@
   .pick-box.hot .pick-score { color: var(--hot); }
   .pick-box.best .pick-score { color: var(--gold); }
   .pick-sub { font-size: .75rem; color: var(--muted); margin-top: 4px; }
+  .conf-badge {
+    margin-top: 12px;
+    padding: 9px 14px;
+    border-radius: 8px;
+    font-size: .82rem;
+    line-height: 1.4;
+    border-left: 4px solid;
+  }
+  .conf-alta { background: rgba(46,164,79,.12); border-color: var(--green); }
+  .conf-media { background: rgba(212,167,44,.12); border-color: var(--yellow); }
+  .conf-baixa { background: rgba(208,80,80,.12); border-color: var(--red); }
   .config-bar {
     display: flex;
     align-items: center;
@@ -859,6 +870,22 @@ function consenso(nomeA, nomeB, externas = []) {
   }
   const quente = { a: qa, b: qb, p: (m.top.concat([{ a: -1 }]).find(s => s.a === qa && s.b === qb)?.p) ?? null };
 
+  /* quão previsível é o jogo: concentração do resultado + divergência entre as fontes */
+  const maxRes = Math.max(wdl[0], wdl[1], wdl[2]);
+  const fav = wdl[0] >= wdl[1] && wdl[0] >= wdl[2] ? "A" : wdl[2] >= wdl[1] ? "B" : "empate";
+  /* desvio médio das fontes em relação ao consenso (0 = todas concordam) */
+  let div = 0, nd = 0;
+  for (const f of fontes) {
+    div += Math.abs(f.wdl[0] - wdl[0]) + Math.abs(f.wdl[1] - wdl[1]) + Math.abs(f.wdl[2] - wdl[2]);
+    nd++;
+  }
+  div = nd ? div / nd : 0;
+  let nivel, rotulo;
+  if (maxRes >= 0.60 && div < 0.16) { nivel = "alta"; rotulo = "Favorito claro"; }
+  else if (maxRes >= 0.45) { nivel = "media"; rotulo = "Favorito leve"; }
+  else { nivel = "baixa"; rotulo = "Jogo equilibrado"; }
+  m.confianca = { nivel, rotulo, maxRes, fav, div, pTopExato: m.melhor.p };
+
   return { ...m, wdlCons: wdl, fontes, quente };
 }
 
@@ -899,6 +926,19 @@ function htmlPrevisao(nomeA, nomeB, r) {
       </div>`);
   const picks = `<div class="picks">${caixas.join("")}</div>`;
 
+  const c = r.confianca;
+  let aviso = "";
+  if (c) {
+    const dicas = {
+      alta: "as fontes concordam num favorito — palpite no resultado é seguro; arrisque o placar exato.",
+      media: "há favorito, mas o placar é incerto — vá no resultado provável sem ousar muito no placar.",
+      baixa: "jogo de risco / fontes divididas — priorize só acertar o resultado, ou arrisque uma zebra de propósito."
+    };
+    aviso = `<div class="conf-badge conf-${c.nivel}">
+      🎚️ Confiança: <b>${c.rotulo}</b> · placar mais provável tem só ${pct(c.pTopExato)} de chance — ${dicas[c.nivel]}
+    </div>`;
+  }
+
   const pV = r.wdlCons ? r.wdlCons[0] : r.pV;
   const pE = r.wdlCons ? r.wdlCons[1] : r.pE;
   const pD = r.wdlCons ? r.wdlCons[2] : r.pD;
@@ -913,6 +953,7 @@ function htmlPrevisao(nomeA, nomeB, r) {
   const linhaPts = s => `<tr><td class="score-cell">${s.a} × ${s.b}</td><td><b>${s.e.toFixed(2)} pts</b></td><td>${pct(s.p)}</td></tr>`;
 
   return `${picks}
+    ${aviso}
     <div class="probs">
       <div class="prob-bar">
         <div class="pb-w" style="flex:${pV}">${pct(pV)}</div>
