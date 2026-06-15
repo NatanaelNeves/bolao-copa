@@ -108,6 +108,24 @@
   .conf-alta { background: rgba(46,164,79,.12); border-color: var(--green); }
   .conf-media { background: rgba(212,167,44,.12); border-color: var(--yellow); }
   .conf-baixa { background: rgba(208,80,80,.12); border-color: var(--red); }
+  .conf-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .conf-meter {
+    flex: 1;
+    min-width: 80px;
+    height: 7px;
+    background: var(--card2);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .conf-fill { display: block; height: 100%; border-radius: 4px; }
+  .conf-fill-alta { background: var(--green); }
+  .conf-fill-media { background: var(--yellow); }
+  .conf-fill-baixa { background: var(--red); }
+  .conf-imprev { font-size: .75rem; color: var(--muted); }
+  .conf-dica { margin-top: 5px; color: var(--muted); }
+  .mkt-alta { color: var(--green); }
+  .mkt-media { color: var(--yellow); }
+  .mkt-baixa { color: var(--red); }
   .config-bar {
     display: flex;
     align-items: center;
@@ -870,23 +888,51 @@ function consenso(nomeA, nomeB, externas = []) {
   }
   const quente = { a: qa, b: qb, p: (m.top.concat([{ a: -1 }]).find(s => s.a === qa && s.b === qb)?.p) ?? null };
 
-  /* quão previsível é o jogo: concentração do resultado + divergência entre as fontes */
-  const maxRes = Math.max(wdl[0], wdl[1], wdl[2]);
-  const fav = wdl[0] >= wdl[1] && wdl[0] >= wdl[2] ? "A" : wdl[2] >= wdl[1] ? "B" : "empate";
-  /* desvio médio das fontes em relação ao consenso (0 = todas concordam) */
-  let div = 0, nd = 0;
-  for (const f of fontes) {
-    div += Math.abs(f.wdl[0] - wdl[0]) + Math.abs(f.wdl[1] - wdl[1]) + Math.abs(f.wdl[2] - wdl[2]);
-    nd++;
-  }
-  div = nd ? div / nd : 0;
-  let nivel, rotulo;
-  if (maxRes >= 0.60 && div < 0.16) { nivel = "alta"; rotulo = "Favorito claro"; }
-  else if (maxRes >= 0.45) { nivel = "media"; rotulo = "Favorito leve"; }
-  else { nivel = "baixa"; rotulo = "Jogo equilibrado"; }
-  m.confianca = { nivel, rotulo, maxRes, fav, div, pTopExato: m.melhor.p };
+  m.mercado = consensoMercado(fontes);
+  m.confianca = calcularConfianca(wdl, m, m.mercado);
 
   return { ...m, wdlCons: wdl, fontes, quente };
+}
+
+const clamp01 = x => Math.min(1, Math.max(0, x));
+
+/* Consenso do mercado (ponto 2): divergência só entre as casas de aposta */
+function consensoMercado(fontes) {
+  const mkt = fontes.filter(f => /💹|🏦|🌍|📊/.test(f.rotulo));
+  if (mkt.length < 2) return null;
+  const media = [0, 1, 2].map(i => mkt.reduce((s, f) => s + f.wdl[i], 0) / mkt.length);
+  let div = 0;
+  for (const f of mkt) div += Math.abs(f.wdl[0] - media[0]) + Math.abs(f.wdl[1] - media[1]) + Math.abs(f.wdl[2] - media[2]);
+  div /= mkt.length;
+  let nivel, rotulo;
+  if (div < 0.05) { nivel = "alta"; rotulo = "Forte"; }
+  else if (div < 0.11) { nivel = "media"; rotulo = "Moderado"; }
+  else { nivel = "baixa"; rotulo = "Fraco"; }
+  return { nivel, rotulo, div, n: mkt.length };
+}
+
+/* Índice de confiabilidade 0–100, combinando 4 sinais (ponto 1 do roteiro):
+   clareza do resultado, entropia, concentração do placar e concordância das casas. */
+function calcularConfianca(wdl, m, mercado) {
+  const maxRes = Math.max(wdl[0], wdl[1], wdl[2]);
+  const fav = wdl[0] >= wdl[1] && wdl[0] >= wdl[2] ? "A" : wdl[2] >= wdl[1] ? "B" : "empate";
+
+  /* entropia de Shannon normalizada (0 = certeza, 1 = total incerteza) */
+  const H = -wdl.reduce((s, p) => s + (p > 0 ? p * Math.log(p) : 0), 0) / Math.log(3);
+  const div = mercado ? mercado.div : 0.10; // divergência entre as casas (ponto 2)
+
+  const clareza    = clamp01((maxRes - 0.34) / (0.80 - 0.34));      // o quão destacado é o favorito
+  const certeza    = clamp01(1 - H);                               // inverso da entropia
+  const concPlacar = clamp01((m.melhor.p - 0.09) / (0.17 - 0.09)); // concentração do placar exato
+  const acordo     = clamp01(1 - div / 0.14);                      // concordância entre as casas
+
+  const score = Math.round(100 * (0.42 * clareza + 0.22 * certeza + 0.16 * concPlacar + 0.20 * acordo));
+  let nivel, rotulo;
+  if (score >= 65) { nivel = "alta"; rotulo = "Favorito claro"; }
+  else if (score >= 40) { nivel = "media"; rotulo = "Favorito leve"; }
+  else { nivel = "baixa"; rotulo = "Jogo equilibrado"; }
+
+  return { nivel, rotulo, score, imprev: 100 - score, maxRes, fav, div, pTopExato: m.melhor.p };
 }
 
 const fmtVotos = n => {
@@ -930,12 +976,19 @@ function htmlPrevisao(nomeA, nomeB, r) {
   let aviso = "";
   if (c) {
     const dicas = {
-      alta: "as fontes concordam num favorito — palpite no resultado é seguro; arrisque o placar exato.",
+      alta: "favorito sólido — palpite no resultado é seguro; vale arriscar o placar exato.",
       media: "há favorito, mas o placar é incerto — vá no resultado provável sem ousar muito no placar.",
       baixa: "jogo de risco / fontes divididas — priorize só acertar o resultado, ou arrisque uma zebra de propósito."
     };
+    const mkt = r.mercado;
+    const mktTxt = mkt ? ` · <span class="mkt-${mkt.nivel}">Consenso do mercado: <b>${mkt.rotulo}</b> (${mkt.n} casas)</span>` : "";
     aviso = `<div class="conf-badge conf-${c.nivel}">
-      🎚️ Confiança: <b>${c.rotulo}</b> · placar mais provável tem só ${pct(c.pTopExato)} de chance — ${dicas[c.nivel]}
+      <div class="conf-top">
+        🎚️ <b>Confiabilidade ${c.score}/100</b> — ${c.rotulo}
+        <span class="conf-meter"><span class="conf-fill conf-fill-${c.nivel}" style="width:${c.score}%"></span></span>
+        <span class="conf-imprev">Imprevisibilidade ${c.imprev}/100</span>${mktTxt}
+      </div>
+      <div class="conf-dica">Placar mais provável tem só ${pct(c.pTopExato)} de chance — ${dicas[c.nivel]}</div>
     </div>`;
   }
 
