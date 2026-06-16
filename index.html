@@ -1178,6 +1178,21 @@ function matrizDoSnap(snap) {
   return null;
 }
 
+/* snapshots coletados automaticamente pelo GitHub Action (data/snapshots.json) */
+let histServer = {};
+async function carregarSnapshotsServidor() {
+  try {
+    const r = await fetch("data/snapshots.json?cb=" + Date.now());
+    if (r.ok) histServer = await r.json();
+  } catch (_) { /* arquivo ainda não existe ou offline */ }
+}
+
+/* histórico combinado: servidor (coleta automática) preenchido pelo que o navegador gravou */
+function getHist() {
+  const local = JSON.parse(localStorage.getItem("histPrev") || "{}");
+  return { ...local, ...histServer };
+}
+
 /* guarda a previsão de cada fonte separadamente, antes do apito (permite backtest de pesos) */
 function salvarPrevisao(p) {
   const h = JSON.parse(localStorage.getItem("histPrev") || "{}");
@@ -1203,7 +1218,7 @@ function pontosReais(g, r, m, pts) {
 function avaliarDesempenho() {
   const cont = document.getElementById("perf-body");
   if (!cacheJogos) { cont.innerHTML = '<div class="msg">Carregue os jogos na primeira aba para ver o desempenho.</div>'; return; }
-  const hist = JSON.parse(localStorage.getItem("histPrev") || "{}");
+  const hist = getHist();
   const pts = ptsBolao();
   const finished = cacheJogos.filter(p => p.estado === "post" && p.placar);
 
@@ -1485,6 +1500,7 @@ async function carregarJogos() {
   }
   cacheJogos = partidas;
   renderizar();
+  await carregarSnapshotsServidor();
   avaliarDesempenho();
 
   const temChave = !!localStorage.getItem("oddsApiKey");
