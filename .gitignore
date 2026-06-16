@@ -2,3 +2,7 @@
 *.jpeg
 *.jpg
 *.png
+
+# snapshots são publicados na branch "data" pelo GitHub Action (não em main,
+# pra não disparar rebuild do Pages a cada hora)
+data/snapshots.json

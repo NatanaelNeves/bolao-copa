@@ -1217,13 +1217,15 @@ function matrizDoSnap(snap) {
   return null;
 }
 
-/* snapshots coletados automaticamente pelo GitHub Action (data/snapshots.json) */
+/* snapshots coletados automaticamente pelo GitHub Action, publicados na branch "data"
+   (fora de main, pra não disparar rebuild do Pages a cada hora) */
 let histServer = {};
+const URL_SNAPSHOTS = "https://raw.githubusercontent.com/NatanaelNeves/bolao-copa/data/snapshots.json";
 async function carregarSnapshotsServidor() {
   try {
-    const r = await fetch("data/snapshots.json?cb=" + Date.now());
+    const r = await fetch(URL_SNAPSHOTS + "?cb=" + Date.now());
     if (r.ok) histServer = await r.json();
-  } catch (_) { /* arquivo ainda não existe ou offline */ }
+  } catch (_) { /* branch data ainda não existe ou offline */ }
 }
 
 /* histórico combinado: servidor (coleta automática) preenchido pelo que o navegador gravou */
