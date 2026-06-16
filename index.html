@@ -1125,10 +1125,63 @@ function chaveHist(nA, nB, data) {
   return chave(nA, nB) + "|" + new Date(data).toISOString().slice(0, 10);
 }
 
-/* guarda a previsão de consenso (gols esperados) antes do jogo começar */
-function salvarPrevisao(p, cons) {
+const PESOS_ATUAIS = {
+  pinnacle: PESO_PINNACLE, dk: PESO_MERCADO, multi: PESO_MULTI,
+  poly: PESO_POLY, torcida: PESO_TORCIDA, elo: PESO_ELO
+};
+
+function tipoDe(rotulo) {
+  if (/💹/.test(rotulo)) return "pinnacle";
+  if (/🏦/.test(rotulo)) return "dk";
+  if (/🌍/.test(rotulo)) return "multi";
+  if (/📊/.test(rotulo)) return "poly";
+  if (/👥/.test(rotulo)) return "torcida";
+  if (/📈/.test(rotulo)) return "elo";
+  return "outro";
+}
+
+/* todas as fontes do jogo (Elo + externas), no formato cru para re-blend posterior */
+function fontesCompletas(p) {
+  const elo = preverElo(p.nA, p.nB);
+  const eloF = { rotulo: "📈", wdl: [elo.pV, elo.pE, elo.pD], pOver: elo.pO25 };
+  return [eloF, ...(p.fontes || []).filter(Boolean)].map(f => ({
+    tipo: tipoDe(f.rotulo), wdl: f.wdl, pOver: f.pOver ?? null,
+    lamA: f.lamA ?? null, lamB: f.lamB ?? null
+  }));
+}
+
+/* re-combina as fontes guardadas com um vetor de pesos arbitrário -> matriz de placares
+   (mesma matemática do consenso ao vivo: pOver -> λ total, supremacia, ajuste de xG) */
+function blendCustom(fontes, pesos) {
+  let sp = 0, wdl = [0, 0, 0], po = 0, spo = 0;
+  for (const f of fontes) {
+    const w = pesos[f.tipo] ?? 0;
+    if (!w) continue;
+    sp += w;
+    for (let i = 0; i < 3; i++) wdl[i] += f.wdl[i] * w;
+    if (f.pOver != null) { po += f.pOver * w; spo += w; }
+  }
+  if (!sp) return null;
+  for (let i = 0; i < 3; i++) wdl[i] /= sp;
+  po = spo > 0 ? po / spo : 0.45;
+  const lTotal = lambdaDoOver(po);
+  let { lA, lB } = ajustarSupremacia(lTotal, wdl[0] - wdl[2]);
+  const xg = fontes.find(f => f.lamA != null && (pesos[f.tipo] ?? 0) > 0);
+  if (xg) { lA = (lA + xg.lamA) / 2; lB = (lB + xg.lamB) / 2; }
+  return matrizPlacares(lA, lB);
+}
+
+/* matriz a partir de um snapshot salvo (re-blend com os pesos atuais; aceita formato antigo) */
+function matrizDoSnap(snap) {
+  if (snap.fontes) { const m = blendCustom(snap.fontes, PESOS_ATUAIS); if (m) return m; }
+  if (snap.lA != null) return matrizPlacares(snap.lA, snap.lB);
+  return null;
+}
+
+/* guarda a previsão de cada fonte separadamente, antes do apito (permite backtest de pesos) */
+function salvarPrevisao(p) {
   const h = JSON.parse(localStorage.getItem("histPrev") || "{}");
-  h[chaveHist(p.nA, p.nB, p.data)] = { nA: p.nA, nB: p.nB, data: p.data, lA: cons.lA, lB: cons.lB };
+  h[chaveHist(p.nA, p.nB, p.data)] = { nA: p.nA, nB: p.nB, data: p.data, fontes: fontesCompletas(p) };
   localStorage.setItem("histPrev", JSON.stringify(h));
 }
 
@@ -1160,10 +1213,9 @@ function avaliarDesempenho() {
     const ga = parseInt(p.placar[0]), gb = parseInt(p.placar[1]);
     if (!isFinite(ga) || !isFinite(gb)) continue;
     const snap = hist[chaveHist(p.nA, p.nB, p.data)];
-    let lA, lB, fonte;
-    if (snap) { lA = snap.lA; lB = snap.lB; fonte = "consenso"; ag.real++; }
-    else { const e = preverElo(p.nA, p.nB); lA = e.lA; lB = e.lB; fonte = "elo"; ag.elo++; }
-    const m = matrizPlacares(lA, lB);
+    let m, fonte;
+    if (snap && (m = matrizDoSnap(snap))) { fonte = "consenso"; ag.real++; }
+    else { const e = preverElo(p.nA, p.nB); m = matrizPlacares(e.lA, e.lB); fonte = "elo"; ag.elo++; }
     const wdl = [m.pV, m.pE, m.pD];
     const realRes = ga > gb ? 0 : ga < gb ? 2 : 1;
     const ranked = rankearPalpites(m, pts);
@@ -1238,7 +1290,90 @@ function avaliarDesempenho() {
           ${corpoTab}
         </table>
       </details>
+    </div>
+    ${backtestPesos(finished, hist, pts)}`;
+}
+
+/* ============================================================
+   BACKTEST DE PESOS (ponto 7): re-combina as fontes guardadas com vários
+   conjuntos de pesos e mede qual teria rendido mais no SEU bolão.
+   Usa só jogos com snapshot por fonte (consenso completo).
+   ============================================================ */
+const PRESETS_PESOS = [
+  { nome: "Atual (em uso)", w: PESOS_ATUAIS },
+  { nome: "Odds-pesado (sugerido)", w: { pinnacle: 4, dk: 1.5, multi: 1.5, poly: 1.5, torcida: 0.5, elo: 1 } },
+  { nome: "Só mercado", w: { pinnacle: 3, dk: 2, multi: 2, poly: 2, torcida: 0, elo: 0 } },
+  { nome: "Só Pinnacle", w: { pinnacle: 1, dk: 0, multi: 0, poly: 0, torcida: 0, elo: 0 } },
+  { nome: "Sem torcida", w: { pinnacle: 3, dk: 2.5, multi: 2.5, poly: 2, torcida: 0, elo: 1.5 } },
+  { nome: "Equilibrado", w: { pinnacle: 2, dk: 2, multi: 2, poly: 2, torcida: 2, elo: 2 } }
+];
+const MIN_BT = 8;
+
+function backtestPesos(finished, hist, pts) {
+  const jogos = [];
+  for (const p of finished) {
+    const ga = parseInt(p.placar[0]), gb = parseInt(p.placar[1]);
+    if (!isFinite(ga) || !isFinite(gb)) continue;
+    const snap = hist[chaveHist(p.nA, p.nB, p.data)];
+    if (snap?.fontes) jogos.push({ snap, ga, gb });
+  }
+
+  if (jogos.length < MIN_BT) {
+    return `<div class="card">
+      <h3 style="margin-bottom:8px">🔬 Backtest de pesos</h3>
+      <p style="color:var(--muted);font-size:.86rem;line-height:1.5">
+        O otimizador de pesos testa qual combinação de fontes teria rendido mais pontos no seu bolão.
+        Ele precisa de jogos com a previsão de <b>todas as fontes</b> gravada antes do apito —
+        e isso só passou a ser coletado agora.<br>
+        <b>Progresso: ${jogos.length}/${MIN_BT} jogos com dados completos.</b>
+        Deixe o app aberto perto dos próximos jogos para acumular; o otimizador ativa sozinho ao chegar em ${MIN_BT}.
+      </p>
     </div>`;
+  }
+
+  const res = PRESETS_PESOS.map(preset => {
+    let sPts = 0, sLog = 0, sBrier = 0, n = 0;
+    for (const { snap, ga, gb } of jogos) {
+      const m = blendCustom(snap.fontes, preset.w);
+      if (!m) continue;
+      const wdl = [m.pV, m.pE, m.pD];
+      const realRes = ga > gb ? 0 : ga < gb ? 2 : 1;
+      const pReal = Math.max(1e-6, wdl[realRes]);
+      sLog += -Math.log(pReal);
+      const y = [realRes === 0 ? 1 : 0, realRes === 1 ? 1 : 0, realRes === 2 ? 1 : 0];
+      sBrier += (wdl[0] - y[0]) ** 2 + (wdl[1] - y[1]) ** 2 + (wdl[2] - y[2]) ** 2;
+      const best = rankearPalpites(m, pts)[0];
+      sPts += pontosReais([best.a, best.b], [ga, gb], m, pts);
+      n++;
+    }
+    return { nome: preset.nome, pts: sPts / n, log: sLog / n, brier: sBrier / n };
+  }).sort((a, b) => b.pts - a.pts);
+
+  const melhor = res[0];
+  const linhas = res.map((r, i) => `
+    <tr${i === 0 ? ' style="color:var(--gold);font-weight:700"' : ""}>
+      <td class="jogo">${i === 0 ? "🥇 " : ""}${r.nome}</td>
+      <td><b>${r.pts.toFixed(2)}</b></td>
+      <td>${r.log.toFixed(3)}</td>
+      <td>${r.brier.toFixed(3)}</td>
+    </tr>`).join("");
+
+  const atual = res.find(r => r.nome === "Atual (em uso)");
+  const ganho = (melhor.pts - atual.pts).toFixed(2);
+
+  return `<div class="card">
+    <h3 style="margin-bottom:8px">🔬 Backtest de pesos — ${jogos.length} jogos com dados completos</h3>
+    <table class="perf-table">
+      <tr><th>Combinação de pesos</th><th>pts/jogo 🏆</th><th>Log Loss</th><th>Brier</th></tr>
+      ${linhas}
+    </table>
+    <p style="color:var(--muted);font-size:.84rem;line-height:1.5;margin-top:10px">
+      Ordenado por <b>média de pontos no seu bolão</b> (o que realmente importa). Log Loss e Brier menores = probabilidades melhores.
+      ${melhor.nome === "Atual (em uso)"
+        ? "✅ A combinação atual é a que mais rende até aqui — sem mudança recomendada."
+        : `💡 A combinação <b>"${melhor.nome}"</b> teria rendido <b>+${ganho} pts/jogo</b> a mais que a atual neste recorte. Quer que eu adote esses pesos?`}
+    </p>
+  </div>`;
 }
 
 let cacheJogos = null;
@@ -1345,7 +1480,7 @@ async function carregarJogos() {
   /* snapshot da previsão de consenso de cada jogo pré-jogo (para avaliar depois) */
   for (const p of partidas) {
     if (p.estado === "pre" && p.fontes && p.fontes.some(f => f)) {
-      salvarPrevisao(p, consenso(p.nA, p.nB, p.fontes));
+      salvarPrevisao(p);
     }
   }
   cacheJogos = partidas;
