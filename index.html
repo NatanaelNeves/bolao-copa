@@ -890,6 +890,15 @@ async function buscarPolymarket(jogos) {
   return idx;
 }
 
+/* Torcedor sub-reporta empate de forma sistemática (medido: ~9,7% vs ~20,7% do mercado).
+   Corrige multiplicando a fatia de empate e renormalizando — calibração baseada em dado real. */
+const FATOR_EMPATE_TORCIDA = 2.0;
+function deBiasTorcida([w, e, l]) {
+  e *= FATOR_EMPATE_TORCIDA;
+  const s = w + e + l;
+  return [w / s, e / s, l / s];
+}
+
 function extrairVotos365(game) {
   const preds = game?.predictions ?? [];
   const res = {};
@@ -898,7 +907,7 @@ function extrairVotos365(game) {
     const v = www.options.map(op => op.vote?.percentage ?? 0);
     const s = v[0] + v[1] + v[2];
     if (s > 0) {
-      res.wdl = [v[0] / s, v[1] / s, v[2] / s];
+      res.wdl = deBiasTorcida([v[0] / s, v[1] / s, v[2] / s]);
       res.peso = PESO_TORCIDA;
       res.rotulo = "👥 " + fmtVotos(www.totalVotes) + " palpites";
     }

@@ -256,6 +256,13 @@ function timeDaPergunta(q) {
   for (const c of cands) if (qn.includes(norm(c))) return nomeBR(c);
   return null;
 }
+/* corrige o viés anti-empate da torcida (mesma calibração do app) */
+const FATOR_EMPATE_TORCIDA = 2.0;
+function deBiasTorcida([w, e, l]) {
+  e *= FATOR_EMPATE_TORCIDA;
+  const s = w + e + l;
+  return [w / s, e / s, l / s];
+}
 async function buscar365(ini, fim) {
   const url = `https://webws.365scores.com/web/games/?appTypeId=5&langId=1&timezoneName=America/Sao_Paulo&competitions=${COMP_365}&startDate=${fmtBR(ini)}&endDate=${fmtBR(fim)}`;
   const jogos = (await jget(url)).games ?? [];
@@ -269,7 +276,7 @@ async function buscar365(ini, fim) {
       if (!www) continue;
       const v = www.options.map(op => op.vote?.percentage ?? 0), s = v[0] + v[1] + v[2];
       if (s <= 0) continue;
-      const f = { tipo: "torcida", wdl: [v[0] / s, v[1] / s, v[2] / s], pOver: null, lamA: null, lamB: null };
+      const f = { tipo: "torcida", wdl: deBiasTorcida([v[0] / s, v[1] / s, v[2] / s]), pOver: null, lamA: null, lamB: null };
       const tot = preds.find(p => p.type === 3 && (p.title ?? "").includes("2.5"));
       if (tot) {
         const ov = tot.options.find(o => /over/i.test(o.name)), un = tot.options.find(o => /under/i.test(o.name));
