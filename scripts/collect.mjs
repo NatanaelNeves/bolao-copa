@@ -280,6 +280,45 @@ async function buscar365(ini, fim) {
   }
   return idx;
 }
+/* mercado de placar exato (Pinnacle "Correct Score") -> distribuição normalizada por jogo */
+async function buscarCorrectScore() {
+  const cfg = { headers: { "X-API-Key": PIN_KEY } };
+  const all = await jget("https://guest.api.arcadia.pinnacle.com/0.1/sports/29/matchups?withSpecials=true", cfg);
+  const specials = all.filter(m => m.league?.name?.startsWith("FIFA - World Cup") &&
+    m.special?.description === "Correct Score" && m.participants?.length);
+  const idx = {};
+  for (const sp of specials) {
+    try {
+      const nome = {};
+      for (const p of sp.participants) nome[String(p.id)] = p.name;
+      const mks = await jget(`https://guest.api.arcadia.pinnacle.com/0.1/matchups/${sp.id}/markets/related/straight`, cfg);
+      const mk = mks.filter(x => x.prices?.length >= 15).sort((a, b) => b.prices.length - a.prices.length)[0];
+      if (!mk) continue;
+      const amostra = sp.participants[0].name.split(",").map(s => s.trim());
+      const homeName = amostra[0].replace(/\s+-?\d+$/, "").trim();
+      const awayName = amostra[1].replace(/\s+-?\d+$/, "").trim();
+      const nA = nomeBR(homeName), nB = nomeBR(awayName);
+      const lista = []; let soma = 0;
+      for (const pr of mk.prices) {
+        const nm = nome[String(pr.participantId)]; if (!nm) continue;
+        const parts = nm.split(",").map(s => s.trim()); if (parts.length < 2) continue;
+        const m1 = parts[0].match(/(\d+)\s*$/), m2 = parts[1].match(/(\d+)\s*$/);
+        if (!m1 || !m2) continue; // pula buckets tipo "Any Other"
+        const g1 = +m1[1], g2 = +m2[1];
+        const t1 = parts[0].replace(/\s+-?\d+\s*$/, "").trim();
+        const prob = probAmericana(pr.price); if (prob == null) continue;
+        const ehA = nomeBR(t1) === nA;
+        lista.push({ a: ehA ? g1 : g2, b: ehA ? g2 : g1, p: prob });
+        soma += prob;
+      }
+      if (soma <= 0 || lista.length < 6) continue;
+      for (const s of lista) s.p /= soma; // remove o overround
+      idx[chave(nA, nB)] = lista;
+    } catch (_) {}
+  }
+  return idx;
+}
+
 async function buscarOddsApi(jogosPre) {
   const key = process.env.ODDS_API_KEY; if (!key) return {};
   const eventos = await jget("https://api.the-odds-api.com/v4/sports/soccer_fifa_world_cup/odds/" +
@@ -322,13 +361,14 @@ async function main() {
   });
   log(`ESPN: ${espn.length} jogos, ${pre.length} ainda não iniciados`);
 
-  const [pin, multi, poly, torcida] = await Promise.all([
+  const [pin, multi, poly, torcida, cs] = await Promise.all([
     buscarPinnacle().catch(e => (log("Pinnacle falhou:", e.message), {})),
     buscarOddsApi(pre).catch(e => (log("OddsAPI falhou:", e.message), {})),
     buscarPolymarket(pre).catch(e => (log("Polymarket falhou:", e.message), {})),
-    buscar365(hoje, fim).catch(e => (log("365 falhou:", e.message), {}))
+    buscar365(hoje, fim).catch(e => (log("365 falhou:", e.message), {})),
+    buscarCorrectScore().catch(e => (log("CorrectScore falhou:", e.message), {}))
   ]);
-  log(`fontes: Pinnacle ${Object.keys(pin).length} · multi ${Object.keys(multi).length} · poly ${Object.keys(poly).length} · torcida ${Object.keys(torcida).length}`);
+  log(`fontes: Pinnacle ${Object.keys(pin).length} · multi ${Object.keys(multi).length} · poly ${Object.keys(poly).length} · torcida ${Object.keys(torcida).length} · correctScore ${Object.keys(cs).length}`);
 
   let hist = {};
   try { hist = JSON.parse(readFileSync(ARQ, "utf8")); } catch (_) { log("snapshots.json novo"); }
@@ -340,7 +380,9 @@ async function main() {
     const fontes = [{ tipo: "elo", wdl: [elo.pV, elo.pE, elo.pD], pOver: elo.pO25, lamA: null, lamB: null }];
     for (const src of [pin[k], oddsESPN(p.comp), multi[k], poly[k], torcida[k]]) if (src) fontes.push(src);
     if (fontes.length < 2) continue; // só Elo não vale snapshot
-    hist[chaveHist(p.nA, p.nB, p.data)] = { nA: p.nA, nB: p.nB, data: p.data, fontes, atualizado: new Date().toISOString() };
+    const reg = { nA: p.nA, nB: p.nB, data: p.data, fontes, atualizado: new Date().toISOString() };
+    if (cs[k]?.length) reg.cs = cs[k];
+    hist[chaveHist(p.nA, p.nB, p.data)] = reg;
     gravados++;
   }
 

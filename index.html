@@ -488,9 +488,28 @@ function pois(k, l) { return Math.exp(-l) * Math.pow(l, k) / fact(k); }
 
 const RHO = -0.12; // correção Dixon-Coles para placares baixos
 
-function matrizPlacares(lA, lB) {
-  const N = 8, M = [];
+const N_PLACAR = 8;
+
+/* agrega um grid 8×8 de probabilidades nos números que o app usa */
+function agregarPlacares(grid) {
+  const N = grid.length;
   let soma = 0;
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) soma += grid[i][j];
+  let pV = 0, pE = 0, pD = 0, pO25 = 0, pAmbos = 0;
+  const placares = [];
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+    const p = grid[i][j] / soma;
+    if (i > j) pV += p; else if (i === j) pE += p; else pD += p;
+    if (i + j > 2.5) pO25 += p;
+    if (i > 0 && j > 0) pAmbos += p;
+    placares.push({ a: i, b: j, p });
+  }
+  placares.sort((x, y) => y.p - x.p);
+  return { pV, pE, pD, pO25, pAmbos, todos: placares, top: placares.slice(0, 6), melhor: placares[0] };
+}
+
+function matrizPlacares(lA, lB) {
+  const N = N_PLACAR, M = [];
   for (let i = 0; i < N; i++) {
     M[i] = [];
     for (let j = 0; j < N; j++) {
@@ -500,20 +519,29 @@ function matrizPlacares(lA, lB) {
       else if (i === 1 && j === 0) p *= 1 + lB * RHO;
       else if (i === 1 && j === 1) p *= 1 - RHO;
       M[i][j] = p;
-      soma += p;
     }
   }
-  let pV = 0, pE = 0, pD = 0, pO25 = 0, pAmbos = 0;
-  const placares = [];
-  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
-    const p = M[i][j] / soma;
-    if (i > j) pV += p; else if (i === j) pE += p; else pD += p;
-    if (i + j > 2.5) pO25 += p;
-    if (i > 0 && j > 0) pAmbos += p;
-    placares.push({ a: i, b: j, p });
-  }
-  placares.sort((x, y) => y.p - x.p);
-  return { lA, lB, pV, pE, pD, pO25, pAmbos, todos: placares, top: placares.slice(0, 6), melhor: placares[0] };
+  return { lA, lB, ...agregarPlacares(M) };
+}
+
+/* peso do mercado de placar exato (Pinnacle Correct Score) na matriz final.
+   É a fonte mais direta de placar exato que existe — dinheiro real por placar. */
+const PESO_CS = 0.5;
+
+/* mistura a matriz do modelo com a do mercado de placar exato (lista {a,b,p}) */
+function aplicarCS(m, csList, frac = PESO_CS) {
+  if (!csList?.length) return m;
+  const N = N_PLACAR;
+  const modelo = Array.from({ length: N }, () => new Array(N).fill(0));
+  for (const s of m.todos) if (s.a < N && s.b < N) modelo[s.a][s.b] = s.p;
+  const cs = Array.from({ length: N }, () => new Array(N).fill(0));
+  let somaCS = 0;
+  for (const s of csList) if (s.a < N && s.b < N) { cs[s.a][s.b] = s.p; somaCS += s.p; }
+  if (somaCS <= 0) return m;
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) cs[i][j] /= somaCS;
+  const blend = Array.from({ length: N }, () => new Array(N).fill(0));
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) blend[i][j] = frac * cs[i][j] + (1 - frac) * modelo[i][j];
+  return { lA: m.lA, lB: m.lB, ...agregarPlacares(blend), comCS: true };
 }
 
 /* ============================================================
@@ -890,7 +918,7 @@ function extrairVotos365(game) {
 /* ============================================================
    CONSENSO
    ============================================================ */
-function consenso(nomeA, nomeB, externas = []) {
+function consenso(nomeA, nomeB, externas = [], csList = null) {
   const fontes = [];
   const elo = preverElo(nomeA, nomeB);
   fontes.push({ wdl: [elo.pV, elo.pE, elo.pD], pOver: elo.pO25, peso: PESO_ELO, rotulo: "📈 Modelo Elo" });
@@ -916,7 +944,8 @@ function consenso(nomeA, nomeB, externas = []) {
     lA = (lA + xgMercado.lamA) / 2;
     lB = (lB + xgMercado.lamB) / 2;
   }
-  const m = matrizPlacares(lA, lB);
+  let m = matrizPlacares(lA, lB);
+  if (csList?.length) m = aplicarCS(m, csList);
   m.xgMercado = !!xgMercado;
 
   /* "palpite quente": gols esperados arredondados (o estilo dos sites de previsão) */
@@ -1059,9 +1088,10 @@ function htmlPrevisao(nomeA, nomeB, r) {
     ${chips ? `<div class="fontes">${chips}</div>` : ""}
     <div class="extras">
       <span>Pts base se acertar (V/E/D): <b>${pontosBase(pV, pts)} / ${pontosBase(pE, pts)} / ${pontosBase(pD, pts)}</b></span>
-      <span>Gols esperados: <b>${r.lA.toFixed(2)} × ${r.lB.toFixed(2)}</b>${r.xgMercado ? " ✓ mercado de gols por time" : ""}</span>
+      <span>Gols esperados: <b>${r.lA.toFixed(2)} × ${r.lB.toFixed(2)}</b>${r.xgMercado ? " ✓ xG por time" : ""}</span>
       <span>+2,5 gols: <b>${pct(r.pO25)}</b></span>
       <span>Ambos marcam: <b>${pct(r.pAmbos)}</b></span>
+      ${r.comCS ? '<span style="color:var(--gold)">🎯 placar ancorado no mercado de Correct Score</span>' : ""}
     </div>
     <details>
       <summary>Estatísticas completas: probabilidade × pontos esperados</summary>
@@ -1152,7 +1182,7 @@ function fontesCompletas(p) {
 
 /* re-combina as fontes guardadas com um vetor de pesos arbitrário -> matriz de placares
    (mesma matemática do consenso ao vivo: pOver -> λ total, supremacia, ajuste de xG) */
-function blendCustom(fontes, pesos) {
+function blendCustom(fontes, pesos, csList = null) {
   let sp = 0, wdl = [0, 0, 0], po = 0, spo = 0;
   for (const f of fontes) {
     const w = pesos[f.tipo] ?? 0;
@@ -1168,12 +1198,12 @@ function blendCustom(fontes, pesos) {
   let { lA, lB } = ajustarSupremacia(lTotal, wdl[0] - wdl[2]);
   const xg = fontes.find(f => f.lamA != null && (pesos[f.tipo] ?? 0) > 0);
   if (xg) { lA = (lA + xg.lamA) / 2; lB = (lB + xg.lamB) / 2; }
-  return matrizPlacares(lA, lB);
+  return aplicarCS(matrizPlacares(lA, lB), csList);
 }
 
 /* matriz a partir de um snapshot salvo (re-blend com os pesos atuais; aceita formato antigo) */
 function matrizDoSnap(snap) {
-  if (snap.fontes) { const m = blendCustom(snap.fontes, PESOS_ATUAIS); if (m) return m; }
+  if (snap.fontes) { const m = blendCustom(snap.fontes, PESOS_ATUAIS, snap.cs); if (m) return m; }
   if (snap.lA != null) return matrizPlacares(snap.lA, snap.lB);
   return null;
 }
@@ -1401,7 +1431,8 @@ function renderizar() {
   document.getElementById("lista-jogos").innerHTML = visiveis.map(p => {
     let corpo;
     if (p.estado === "pre") {
-      corpo = htmlPrevisao(p.nA, p.nB, consenso(p.nA, p.nB, p.fontes ?? []));
+      const cs = (histServer[chaveHist(p.nA, p.nB, p.data)] || {}).cs;
+      corpo = htmlPrevisao(p.nA, p.nB, consenso(p.nA, p.nB, p.fontes ?? [], cs));
     } else if (p.estado === "in") {
       corpo = `<div class="real-score"><span class="status-live">● AO VIVO ${p.status?.displayClock ?? ""}</span><br>
                ${p.placar[0]} × ${p.placar[1]}</div>`;
@@ -1499,8 +1530,8 @@ async function carregarJogos() {
     }
   }
   cacheJogos = partidas;
-  renderizar();
   await carregarSnapshotsServidor();
+  renderizar();
   avaliarDesempenho();
 
   const temChave = !!localStorage.getItem("oddsApiKey");
