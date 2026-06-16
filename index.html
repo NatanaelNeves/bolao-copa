@@ -126,6 +126,31 @@
   .mkt-alta { color: var(--green); }
   .mkt-media { color: var(--yellow); }
   .mkt-baixa { color: var(--red); }
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .stat-box {
+    background: var(--card2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+    text-align: center;
+  }
+  .stat-num { font-size: 1.7rem; font-weight: 800; color: var(--accent); }
+  .stat-lbl { font-size: .78rem; color: var(--muted); margin-top: 4px; }
+  .stat-sub { font-size: .7rem; color: var(--muted); margin-top: 2px; }
+  .vs-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+  .vs-box { background: var(--card2); border-radius: 10px; padding: 14px; text-align: center; }
+  .vs-box.win { border: 1px solid var(--green); }
+  .perf-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  .perf-table th, .perf-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); text-align: center; }
+  .perf-table th { color: var(--muted); font-weight: 600; }
+  .perf-table td.jogo { text-align: left; white-space: nowrap; }
+  .ok { color: var(--green); }
+  .no { color: var(--red); }
   .config-bar {
     display: flex;
     align-items: center;
@@ -276,6 +301,7 @@
 <div class="tabs">
   <button id="tab-jogos" class="active" onclick="showTab('jogos')">📅 Jogos da Copa</button>
   <button id="tab-sim" onclick="showTab('sim')">🎯 Simular partida</button>
+  <button id="tab-perf" onclick="showTab('perf')">📊 Desempenho</button>
 </div>
 
 <main>
@@ -325,6 +351,18 @@
       </p>
     </div>
     <div id="sim-result"></div>
+  </section>
+
+  <section id="sec-perf" style="display:none">
+    <div class="card">
+      <p style="color:var(--muted);font-size:.9rem;line-height:1.5">
+        📊 Aqui o modelo é avaliado pelas métricas que <b>realmente importam</b> num bolão — não por
+        "acertou o placar exato" (que é raro pra qualquer modelo), mas por acerto de resultado, de saldo,
+        qualidade das probabilidades (Brier score) e, acima de tudo, <b>média de pontos no bolão</b>.
+        O app guarda a previsão de consenso de cada jogo antes do apito e confere quando ele termina.
+      </p>
+    </div>
+    <div id="perf-body"><div class="msg">Carregue os jogos na primeira aba para ver o desempenho.</div></div>
   </section>
 </main>
 
@@ -409,6 +447,7 @@ const PESO_TORCIDA = 1.5;   // votos 365Scores
 const PESO_ELO = 1.5;       // modelo estatístico
 
 const COMP_365 = 5930; // id da Copa do Mundo no 365Scores
+const INICIO_COPA = new Date("2026-06-11T00:00:00"); // para avaliar todos os jogos já encerrados
 const PIN_KEY = "CmX2KcMrXuFmNg6YFbmTxE0y9CIrOi0R"; // chave pública usada pelo próprio site da Pinnacle
 
 /* Códigos FIFA (usados nos slugs do Polymarket) */
@@ -1079,11 +1118,137 @@ async function buscar365(ini, fim) {
   return idx;
 }
 
+/* ============================================================
+   DESEMPENHO: snapshot das previsões + avaliação dos jogos encerrados
+   ============================================================ */
+function chaveHist(nA, nB, data) {
+  return chave(nA, nB) + "|" + new Date(data).toISOString().slice(0, 10);
+}
+
+/* guarda a previsão de consenso (gols esperados) antes do jogo começar */
+function salvarPrevisao(p, cons) {
+  const h = JSON.parse(localStorage.getItem("histPrev") || "{}");
+  h[chaveHist(p.nA, p.nB, p.data)] = { nA: p.nA, nB: p.nB, data: p.data, lA: cons.lA, lB: cons.lB };
+  localStorage.setItem("histPrev", JSON.stringify(h));
+}
+
+/* pontos que um palpite g=[a,b] teria feito num resultado real r=[a,b],
+   usando exatamente as mesmas regras do otimizador (rankearPalpites) */
+function pontosReais(g, r, m, pts) {
+  const [ga, gb] = g, [ra, rb] = r;
+  const gd = ga - gb, rd = ra - rb;
+  const gRes = Math.sign(gd), rRes = Math.sign(rd);
+  let p = 0;
+  if (gRes === rRes) p += pontosBase(rRes > 0 ? m.pV : rRes < 0 ? m.pD : m.pE, pts); // base: acertou o resultado
+  if (gd > 0 && rd > 0) { if (ga === ra) p += pts.bVenc; if (gb === rb) p += pts.bPerd; }
+  else if (gd < 0 && rd < 0) { if (gb === rb) p += pts.bVenc; if (ga === ra) p += pts.bPerd; }
+  if (gd === rd) p += pts.bDiff;               // diferença (saldo) com sinal
+  if (ga === ra && gb === rb) p += pts.bExato; // cravou o placar
+  return p;
+}
+
+function avaliarDesempenho() {
+  const cont = document.getElementById("perf-body");
+  if (!cacheJogos) { cont.innerHTML = '<div class="msg">Carregue os jogos na primeira aba para ver o desempenho.</div>'; return; }
+  const hist = JSON.parse(localStorage.getItem("histPrev") || "{}");
+  const pts = ptsBolao();
+  const finished = cacheJogos.filter(p => p.estado === "post" && p.placar);
+
+  const ag = { res: 0, saldo: 0, exato: 0, brier: 0, pBest: 0, pLikely: 0, n: 0, real: 0, elo: 0 };
+  const linhas = [];
+  for (const p of finished) {
+    const ga = parseInt(p.placar[0]), gb = parseInt(p.placar[1]);
+    if (!isFinite(ga) || !isFinite(gb)) continue;
+    const snap = hist[chaveHist(p.nA, p.nB, p.data)];
+    let lA, lB, fonte;
+    if (snap) { lA = snap.lA; lB = snap.lB; fonte = "consenso"; ag.real++; }
+    else { const e = preverElo(p.nA, p.nB); lA = e.lA; lB = e.lB; fonte = "elo"; ag.elo++; }
+    const m = matrizPlacares(lA, lB);
+    const wdl = [m.pV, m.pE, m.pD];
+    const realRes = ga > gb ? 0 : ga < gb ? 2 : 1;
+    const ranked = rankearPalpites(m, pts);
+    const best = ranked[0], likely = m.melhor;
+    const y = [realRes === 0 ? 1 : 0, realRes === 1 ? 1 : 0, realRes === 2 ? 1 : 0];
+    const brier = (wdl[0] - y[0]) ** 2 + (wdl[1] - y[1]) ** 2 + (wdl[2] - y[2]) ** 2;
+    /* avalia o palpite recomendado (🏆) de ponta a ponta */
+    const acRes = Math.sign(best.a - best.b) === Math.sign(ga - gb);
+    const acSaldo = (best.a - best.b) === (ga - gb);
+    const acExato = best.a === ga && best.b === gb;
+    const pBest = pontosReais([best.a, best.b], [ga, gb], m, pts);
+    const pLikely = pontosReais([likely.a, likely.b], [ga, gb], m, pts);
+    ag.res += acRes; ag.saldo += acSaldo; ag.exato += acExato; ag.brier += brier;
+    ag.pBest += pBest; ag.pLikely += pLikely; ag.n++;
+    linhas.push({ p, ga, gb, best, likely, acRes, acSaldo, acExato, pBest, pLikely, fonte });
+  }
+
+  if (!ag.n) {
+    cont.innerHTML = '<div class="msg">Ainda não há jogos encerrados para avaliar.<br>Os jogos da Copa que já terminaram aparecerão aqui com a nota do modelo.</div>';
+    return;
+  }
+
+  const p1 = n => (100 * n / ag.n).toFixed(0) + "%";
+  const md = n => (n / ag.n).toFixed(2);
+  const brierMedio = ag.brier / ag.n;
+  const venceBest = ag.pBest >= ag.pLikely;
+
+  const corpoTab = linhas.map(l => `
+    <tr>
+      <td class="jogo">${l.p.nA} ${l.ga}×${l.gb} ${l.p.nB}${l.fonte === "elo" ? ' <span style="color:var(--muted)">(Elo)</span>' : ""}</td>
+      <td>${l.best.a}×${l.best.b}</td>
+      <td class="${l.acRes ? "ok" : "no"}">${l.acRes ? "✓" : "✗"}</td>
+      <td class="${l.acSaldo ? "ok" : "no"}">${l.acSaldo ? "✓" : "✗"}</td>
+      <td class="${l.acExato ? "ok" : "no"}">${l.acExato ? "✓" : "✗"}</td>
+      <td><b>${l.pBest}</b></td>
+    </tr>`).join("");
+
+  cont.innerHTML = `
+    <div class="card">
+      <div class="stat-grid">
+        <div class="stat-box"><div class="stat-num">${ag.n}</div><div class="stat-lbl">jogos avaliados</div>
+          <div class="stat-sub">${ag.real} consenso · ${ag.elo} Elo retroativo</div></div>
+        <div class="stat-box"><div class="stat-num">${p1(ag.res)}</div><div class="stat-lbl">acerto de resultado</div>
+          <div class="stat-sub">do palpite 🏆 recomendado</div></div>
+        <div class="stat-box"><div class="stat-num">${p1(ag.saldo)}</div><div class="stat-lbl">acerto de saldo</div>
+          <div class="stat-sub">diferença de gols</div></div>
+        <div class="stat-box"><div class="stat-num">${p1(ag.exato)}</div><div class="stat-lbl">placar exato</div>
+          <div class="stat-sub">naturalmente baixo</div></div>
+        <div class="stat-box"><div class="stat-num">${brierMedio.toFixed(3)}</div><div class="stat-lbl">Brier score</div>
+          <div class="stat-sub">menor = melhor · chute=0,667</div></div>
+      </div>
+      <div class="vs-grid">
+        <div class="vs-box ${venceBest ? "win" : ""}">
+          <div class="stat-num">${md(ag.pBest)}</div>
+          <div class="stat-lbl">🏆 pts/jogo — palpite otimizado</div>
+        </div>
+        <div class="vs-box ${!venceBest ? "win" : ""}">
+          <div class="stat-num">${md(ag.pLikely)}</div>
+          <div class="stat-lbl">🎯 pts/jogo — placar mais provável</div>
+        </div>
+      </div>
+      <p style="color:var(--muted);font-size:.84rem;line-height:1.5">
+        ${venceBest
+          ? `✅ O palpite <b>otimizado por pontos esperados</b> rende em média <b>${(ag.pBest - ag.pLikely >= 0 ? "+" : "") + md(ag.pBest - ag.pLikely)} pts/jogo</b> a mais que cravar sempre o placar mais provável — é a prova de que vale otimizar, não só "adivinhar".`
+          : `Neste recorte o placar mais provável rendeu igual ou mais; com mais jogos a vantagem do otimizado tende a aparecer.`}
+        ${ag.elo ? `<br><span style="font-size:.78rem">⚠️ ${ag.elo} jogo(s) terminaram antes de o app guardar o consenso e foram avaliados pelo modelo Elo (retroativo). Daqui pra frente, os novos jogos usam o consenso completo das ${5} fontes.</span>` : ""}
+      </p>
+      <details style="margin-top:8px">
+        <summary>Ver jogo a jogo</summary>
+        <table class="perf-table">
+          <tr><th>Jogo (resultado real)</th><th>palpite 🏆</th><th>result.</th><th>saldo</th><th>exato</th><th>pts</th></tr>
+          ${corpoTab}
+        </table>
+      </details>
+    </div>`;
+}
+
 let cacheJogos = null;
 
 function renderizar() {
   if (!cacheJogos) return;
-  document.getElementById("lista-jogos").innerHTML = cacheJogos.map(p => {
+  /* lista principal: próximos jogos + resultados dos últimos 3 dias (encerrados antigos só na aba Desempenho) */
+  const limite = Date.now() - 3 * 864e5;
+  const visiveis = cacheJogos.filter(p => p.estado !== "post" || new Date(p.data).getTime() >= limite);
+  document.getElementById("lista-jogos").innerHTML = visiveis.map(p => {
     let corpo;
     if (p.estado === "pre") {
       corpo = htmlPrevisao(p.nA, p.nB, consenso(p.nA, p.nB, p.fontes ?? []));
@@ -1114,7 +1279,7 @@ async function carregarJogos() {
   const fim = new Date(hoje.getTime() + 14 * 864e5);
 
   const [espn, idx365, idxPin, idxMulti] = await Promise.all([
-    buscarESPN(hoje, fim).catch(e => e),
+    buscarESPN(INICIO_COPA, fim).catch(e => e),
     buscar365(hoje, fim).catch(e => e),
     buscarPinnacle().catch(e => e),
     buscarOddsApi().catch(e => e)
@@ -1177,8 +1342,15 @@ async function carregarJogos() {
       g365 ? extrairVotos365(g365) : null
     ];
   }
+  /* snapshot da previsão de consenso de cada jogo pré-jogo (para avaliar depois) */
+  for (const p of partidas) {
+    if (p.estado === "pre" && p.fontes && p.fontes.some(f => f)) {
+      salvarPrevisao(p, consenso(p.nA, p.nB, p.fontes));
+    }
+  }
   cacheJogos = partidas;
   renderizar();
+  avaliarDesempenho();
 
   const temChave = !!localStorage.getItem("oddsApiKey");
   const fontesAtivas = [
@@ -1230,10 +1402,11 @@ function simular() {
    NAVEGAÇÃO
    ============================================================ */
 function showTab(t) {
-  document.getElementById("sec-jogos").style.display = t === "jogos" ? "" : "none";
-  document.getElementById("sec-sim").style.display = t === "sim" ? "" : "none";
-  document.getElementById("tab-jogos").classList.toggle("active", t === "jogos");
-  document.getElementById("tab-sim").classList.toggle("active", t === "sim");
+  for (const s of ["jogos", "sim", "perf"]) {
+    document.getElementById("sec-" + s).style.display = t === s ? "" : "none";
+    document.getElementById("tab-" + s).classList.toggle("active", t === s);
+  }
+  if (t === "perf") avaliarDesempenho();
 }
 
 initPts();
