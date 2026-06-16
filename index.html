@@ -164,6 +164,25 @@
   }
   .crava-pct { color: var(--gold); font-weight: 600; }
   .crava-pe { font-size: .78rem; color: var(--muted); margin-top: 10px; line-height: 1.45; }
+  .top-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .top-strip-lbl { font-size: .8rem; color: var(--muted); }
+  .top-chip {
+    background: var(--card2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 5px 10px;
+    font-size: .9rem;
+  }
+  .top-chip b { color: var(--accent); }
+  .escolha {
+    margin-top: 12px;
+    background: var(--card2);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: .85rem;
+    line-height: 1.5;
+    color: var(--text);
+  }
   .config-bar {
     display: flex;
     align-items: center;
@@ -1042,25 +1061,33 @@ function htmlPrevisao(nomeA, nomeB, r) {
   const mesmoPlacar = (x, y) => x && y && x.a === y.a && x.b === y.b;
   const ePts = s => ranked.find(k => k.a === s.a && k.b === s.b)?.e ?? 0;
 
+  const mesmo = mesmoPlacar(r.melhor, best);
   const caixas = [`
       <div class="pick-box best">
-        <div class="pick-label">🏆 Melhor palpite pro bolão</div>
+        <div class="pick-label">🏆 Seu palpite — rende mais pontos no bolão</div>
         <div class="pick-score">${best.a} × ${best.b}</div>
-        <div class="pick-sub">${best.e.toFixed(1)} pts esperados · ${pct(best.p)} de chance</div>
+        <div class="pick-sub">${mesmo ? "é também o mais provável de cravar · " : ""}chance de cravar: ${pct(best.p)}</div>
       </div>`];
-  if (!mesmoPlacar(r.melhor, best)) caixas.push(`
+  if (!mesmo) caixas.push(`
       <div class="pick-box main">
-        <div class="pick-label">🎯 Placar mais provável</div>
+        <div class="pick-label">🎯 Mais provável de cravar</div>
         <div class="pick-score">${r.melhor.a} × ${r.melhor.b}</div>
-        <div class="pick-sub">${pct(r.melhor.p)} de chance · ${ePts(r.melhor).toFixed(1)} pts esperados</div>
-      </div>`);
-  if (r.quente && !mesmoPlacar(r.quente, best) && !mesmoPlacar(r.quente, r.melhor)) caixas.push(`
-      <div class="pick-box hot">
-        <div class="pick-label">🔥 Palpite quente (gols esperados)</div>
-        <div class="pick-score">${r.quente.a} × ${r.quente.b}</div>
-        <div class="pick-sub">xG ${r.lA.toFixed(1)} × ${r.lB.toFixed(1)} · ${ePts(r.quente).toFixed(1)} pts esperados</div>
+        <div class="pick-sub">${pct(r.melhor.p)} de chance de cravar</div>
       </div>`);
   const picks = `<div class="picks">${caixas.join("")}</div>`;
+
+  /* tira-dúvida: qual dos dois botar */
+  let escolha = "";
+  if (!mesmo) {
+    escolha = `<div class="escolha">🤔 <b>Qual botar?</b> Os dois são bons. Vá no <b>🏆 ${best.a}×${best.b}</b> se quer somar mais pontos no geral (ele acerta o resultado mais vezes); vá no <b>🎯 ${r.melhor.a}×${r.melhor.b}</b> se a sua prioridade é cravar o placar exato.</div>`;
+  }
+
+  /* placares mais prováveis (do mercado de Correct Score quando disponível) — pra você ver as opções */
+  const top3 = [...ranked].sort((x, y) => y.p - x.p).slice(0, 3);
+  const topStrip = `<div class="top-strip">
+    <span class="top-strip-lbl">${r.comCS ? "📊 Placares + prováveis (mercado Pinnacle):" : "📊 Placares + prováveis:"}</span>
+    ${top3.map(s => `<span class="top-chip">${s.a}×${s.b} <b>${pct(s.p)}</b></span>`).join("")}
+  </div>`;
 
   const c = r.confianca;
   let aviso = "";
@@ -1096,6 +1123,8 @@ function htmlPrevisao(nomeA, nomeB, r) {
   const linhaPts = s => `<tr><td class="score-cell">${s.a} × ${s.b}</td><td><b>${s.e.toFixed(2)} pts</b></td><td>${pct(s.p)}</td></tr>`;
 
   return `${picks}
+    ${topStrip}
+    ${escolha}
     ${aviso}
     <div class="probs">
       <div class="prob-bar">
@@ -1491,7 +1520,8 @@ function renderizar() {
       <div class="crava-tit">🎯 Onde vale mirar o placar exato</div>
       <div class="crava-sub">Jogos com a maior chance de cravar o placar (distribuição concentrada). Aqui o palpite exato tem o dobro de chance de um jogo equilibrado — é onde focar a ambição de cravada.</div>
       <div class="crava-lista">${top.map(item).join("")}</div>
-      <div class="crava-pe">Nos jogos fora dessa lista, o placar é praticamente loteria — siga o 🏆 (que já joga seguro nesses) em vez de insistir num placar exato.</div>
+      <div class="crava-pe">Nos jogos fora dessa lista, o placar é praticamente loteria — siga o 🏆 (que já joga seguro nesses) em vez de insistir num placar exato.<br>
+      <b>Por que tantos jogos sugerem 2×1 ou 2×0?</b> Porque esses são os placares mais comuns no futebol quando um favorito vence — não é erro, é estatística. O que muda entre os jogos é a <i>chance</i> de cada um (veja a faixa "📊 placares + prováveis" em cada jogo).</div>
     </div>`;
   }
   document.getElementById("lista-jogos").innerHTML = banner + cards;
