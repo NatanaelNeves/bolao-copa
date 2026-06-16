@@ -151,6 +151,19 @@
   .perf-table td.jogo { text-align: left; white-space: nowrap; }
   .ok { color: var(--green); }
   .no { color: var(--red); }
+  .crava-card { border-color: var(--gold); }
+  .crava-tit { font-weight: 700; color: var(--gold); margin-bottom: 4px; }
+  .crava-sub { font-size: .82rem; color: var(--muted); line-height: 1.45; margin-bottom: 10px; }
+  .crava-lista { display: flex; flex-wrap: wrap; gap: 8px; }
+  .crava-item {
+    background: var(--card2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: .85rem;
+  }
+  .crava-pct { color: var(--gold); font-weight: 600; }
+  .crava-pe { font-size: .78rem; color: var(--muted); margin-top: 10px; line-height: 1.45; }
   .config-bar {
     display: flex;
     align-items: center;
@@ -1439,11 +1452,15 @@ function renderizar() {
   /* lista principal: próximos jogos + resultados dos últimos 3 dias (encerrados antigos só na aba Desempenho) */
   const limite = Date.now() - 3 * 864e5;
   const visiveis = cacheJogos.filter(p => p.estado !== "post" || new Date(p.data).getTime() >= limite);
-  document.getElementById("lista-jogos").innerHTML = visiveis.map(p => {
+  const cravaveis = []; // jogos pré, ordenados por chance de cravar o placar
+
+  const cards = visiveis.map(p => {
     let corpo;
     if (p.estado === "pre") {
       const cs = (histServer[chaveHist(p.nA, p.nB, p.data)] || {}).cs;
-      corpo = htmlPrevisao(p.nA, p.nB, consenso(p.nA, p.nB, p.fontes ?? [], cs));
+      const r = consenso(p.nA, p.nB, p.fontes ?? [], cs);
+      cravaveis.push({ nA: p.nA, nB: p.nB, data: p.data, melhor: r.melhor, comCS: !!r.comCS });
+      corpo = htmlPrevisao(p.nA, p.nB, r);
     } else if (p.estado === "in") {
       corpo = `<div class="real-score"><span class="status-live">● AO VIVO ${p.status?.displayClock ?? ""}</span><br>
                ${p.placar[0]} × ${p.placar[1]}</div>`;
@@ -1463,6 +1480,21 @@ function renderizar() {
       ${corpo}
     </div>`;
   }).join("");
+
+  /* banner: onde vale mirar o placar exato (maior chance de cravar) vs onde é loteria */
+  let banner = "";
+  if (cravaveis.length >= 3) {
+    const ord = [...cravaveis].sort((a, b) => b.melhor.p - a.melhor.p);
+    const top = ord.slice(0, 5);
+    const item = j => `<span class="crava-item"><b>${j.melhor.a}×${j.melhor.b}</b> ${j.nA.slice(0,3).toUpperCase()}–${j.nB.slice(0,3).toUpperCase()} <span class="crava-pct">${pct(j.melhor.p)}</span>${j.comCS ? " 🎯" : ""}</span>`;
+    banner = `<div class="card crava-card">
+      <div class="crava-tit">🎯 Onde vale mirar o placar exato</div>
+      <div class="crava-sub">Jogos com a maior chance de cravar o placar (distribuição concentrada). Aqui o palpite exato tem o dobro de chance de um jogo equilibrado — é onde focar a ambição de cravada.</div>
+      <div class="crava-lista">${top.map(item).join("")}</div>
+      <div class="crava-pe">Nos jogos fora dessa lista, o placar é praticamente loteria — siga o 🏆 (que já joga seguro nesses) em vez de insistir num placar exato.</div>
+    </div>`;
+  }
+  document.getElementById("lista-jogos").innerHTML = banner + cards;
 }
 
 async function carregarJogos() {
